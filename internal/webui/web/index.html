@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>magnet</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">🧲</span>
+      <div>
+        <h1>magnet</h1>
+        <p id="subtitle">Загрузка…</p>
+      </div>
+    </div>
+    <div class="backend-info">
+      <span id="mode-badge" class="badge">…</span>
+      <span id="version" class="muted"></span>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel add-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Добавить magnet-ссылки</h2>
+          <p class="muted">Одна ссылка на строку. Строки, начинающиеся с <code>#</code>, игнорируются.</p>
+        </div>
+      </div>
+      <form id="add-form">
+        <textarea id="magnets" rows="4" spellcheck="false"
+          placeholder="magnet:?xt=urn:btih:...&#10;magnet:?xt=urn:btih:..."></textarea>
+        <div class="form-row">
+          <span class="muted small">Поиск выполняется в фоне: можно добавлять новые ссылки, не дожидаясь завершения.</span>
+          <button id="add-btn" type="submit" class="primary">Добавить</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="toolbar">
+        <div id="filters" class="filters" role="group" aria-label="Фильтр по состоянию">
+          <button type="button" data-state="" class="active">Все</button>
+          <button type="button" data-state="queued">В очереди</button>
+          <button type="button" data-state="searching">Поиск</button>
+          <button type="button" data-state="found">Найдены</button>
+          <button type="button" data-state="failed">Ошибки</button>
+          <button type="button" data-state="canceled">Отменены</button>
+        </div>
+        <label class="checkbox">
+          <input id="purge" type="checkbox">
+          удалять .torrent при удалении задания
+        </label>
+      </div>
+
+      <div id="stats" class="stats" aria-live="polite"></div>
+
+      <div id="banner" class="banner hidden" role="status"></div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Торрент</th>
+              <th>Состояние</th>
+              <th class="col-meta">Попытки</th>
+              <th class="col-meta">Размер</th>
+              <th class="col-meta">Обновлено</th>
+              <th class="actions-col">Действия</th>
+            </tr>
+          </thead>
+          <tbody id="jobs"></tbody>
+        </table>
+      </div>
+      <p id="empty" class="empty hidden">Заданий пока нет. Добавьте magnet-ссылку выше.</p>
+      <p id="limit-note" class="muted small hidden"></p>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

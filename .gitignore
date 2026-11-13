@@ -1,0 +1,5 @@
+/bin/
+/dist/
+/magnet
+*.db
+*.db.lock
