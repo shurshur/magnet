@@ -196,7 +196,7 @@ button.danger:hover { background: var(--danger-soft); }
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 10px;
   margin: 0 0 16px;
 }
@@ -240,6 +240,8 @@ tbody tr:hover { background: color-mix(in srgb, var(--bg-soft) 65%, transparent)
 .job-name { font-weight: 600; overflow-wrap: anywhere; }
 .job-hash { margin-top: 2px; color: var(--muted); font: 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .job-error { margin-top: 5px; color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+.job-warning { margin-top: 5px; color: var(--warning); font-size: 12px; overflow-wrap: anywhere; }
+.state-incomplete { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
 
 .actions-col { width: 1%; white-space: nowrap; }
 .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }

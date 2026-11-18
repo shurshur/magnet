@@ -18,21 +18,23 @@ import (
 
 // Options controls the web UI process.
 type Options struct {
-	Server          string
-	APIToken        string
-	Embedded        bool
-	Listen          string
-	DataDir         string
-	Workers         int
-	AttemptTimeout  time.Duration
-	RetryDelay      time.Duration
-	MaxAttempts     int
-	Port            int
-	DisableTrackers bool
-	NoBrowser       bool
-	Version         string
-	Logger          *slog.Logger
-	Out             io.Writer
+	Server             string
+	APIToken           string
+	Embedded           bool
+	Listen             string
+	DataDir            string
+	Workers            int
+	AttemptTimeout     time.Duration
+	RetryDelay         time.Duration
+	PieceLayersTimeout time.Duration
+	AllowIncompleteV2  bool
+	MaxAttempts        int
+	Port               int
+	DisableTrackers    bool
+	NoBrowser          bool
+	Version            string
+	Logger             *slog.Logger
+	Out                io.Writer
 }
 
 // Run starts the web UI HTTP server and blocks until ctx is canceled or the

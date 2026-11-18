@@ -5,6 +5,7 @@
     queued: "В очереди",
     searching: "Поиск",
     found: "Найден",
+    incomplete: "Неполный",
     failed: "Ошибка",
     canceled: "Отменён",
   };
@@ -13,6 +14,7 @@
     ["queued", "В очереди"],
     ["searching", "Ищутся"],
     ["found", "Найдены"],
+    ["incomplete", "Неполные"],
     ["failed", "Ошибки"],
     ["canceled", "Отменены"],
   ];
@@ -171,7 +173,10 @@
     const name = el("div", "job-name", job.name || "Без имени");
     name.title = job.magnet || "";
     nameCell.appendChild(name);
-    nameCell.appendChild(el("div", "job-hash", shortHash(job.id)));
+    nameCell.appendChild(el("div", "job-hash", shortHash(job.id) + (job.version ? " · " + job.version : "")));
+    if (job.warning) {
+      nameCell.appendChild(el("div", "job-warning", job.warning));
+    }
     if (job.error) {
       nameCell.appendChild(el("div", "job-error", job.error));
     }
@@ -185,7 +190,7 @@
 
     const actionsCell = el("td", "actions-col");
     const actions = el("div", "row-actions");
-    if (job.state === "found") {
+    if (job.state === "found" || job.state === "incomplete") {
       const link = el("a", "button small", "Скачать");
       link.href = "/api/jobs/" + encodeURIComponent(job.id) + "/torrent";
       actions.appendChild(link);
@@ -193,7 +198,7 @@
     if (job.state === "queued" || job.state === "searching") {
       actions.appendChild(actionButton("Отменить", "cancel", job.id));
     }
-    if (job.state === "failed" || job.state === "canceled") {
+    if (job.state === "failed" || job.state === "canceled" || job.state === "incomplete") {
       actions.appendChild(actionButton("Повторить", "retry", job.id));
     }
     actions.appendChild(actionButton("Удалить", "delete", job.id, "danger"));

@@ -40,6 +40,8 @@ func run(args []string) int {
 	fs.IntVar(&opts.Workers, "workers", 4, "число одновременных поисков")
 	fs.DurationVar(&opts.AttemptTimeout, "attempt-timeout", 15*time.Minute, "таймаут одной попытки (0 — без ограничения)")
 	fs.DurationVar(&opts.RetryDelay, "retry-delay", 30*time.Second, "пауза перед повторной попыткой")
+	fs.DurationVar(&opts.PieceLayersTimeout, "piece-layers-timeout", 30*time.Second, "сколько ждать piece layers для v2/hybrid (0 — не ждать)")
+	fs.BoolVar(&opts.AllowIncompleteV2, "allow-incomplete-v2", false, "сохранять v2 без piece layers со статусом incomplete")
 	fs.IntVar(&opts.MaxAttempts, "max-attempts", 0, "максимум попыток на ссылку (0 — без ограничения)")
 	fs.IntVar(&opts.Port, "port", 0, "UDP/TCP-порт DHT и peer-соединений (0 — случайный)")
 	fs.BoolVar(&opts.DisableTrackers, "no-trackers", false, "не использовать трекеры, только DHT")
@@ -64,7 +66,7 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "magnet-web: --workers должен быть больше нуля")
 		return 2
 	}
-	if opts.AttemptTimeout < 0 || opts.RetryDelay < 0 || opts.MaxAttempts < 0 {
+	if opts.AttemptTimeout < 0 || opts.RetryDelay < 0 || opts.PieceLayersTimeout < 0 || opts.MaxAttempts < 0 {
 		fmt.Fprintln(os.Stderr, "magnet-web: таймауты и --max-attempts не могут быть отрицательными")
 		return 2
 	}

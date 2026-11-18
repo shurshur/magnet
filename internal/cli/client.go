@@ -87,7 +87,7 @@ func (a *App) runClientAdd(args []string) int {
 	// of individual API requests or block the rest of a bulk import.
 	validLinks := make([]string, 0, len(links))
 	for _, link := range links {
-		if _, _, err := magnetutil.Parse(link); err != nil {
+		if _, err := magnetutil.Parse(link); err != nil {
 			hadError = true
 			failures = append(failures, map[string]string{"link": link, "error": err.Error()})
 			fmt.Fprintf(a.Stderr, "%s: %v\n", link, err)
@@ -186,7 +186,7 @@ func (a *App) runClientAdd(args []string) int {
 func (a *App) runClientList(args []string) int {
 	fs := newFlagSet("ls", a.Stderr)
 	server, token := clientConnFlags(fs)
-	state := stringFlag(fs, "state", "", "", "фильтр по состоянию: queued, searching, found, failed, canceled")
+	state := stringFlag(fs, "state", "", "", "фильтр по состоянию: queued, searching, found, incomplete, failed, canceled")
 	limit := intFlag(fs, "limit", "n", 100, "размер страницы")
 	all := boolFlag(fs, "all", "a", false, "загрузить все страницы")
 	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
@@ -307,6 +307,7 @@ func (a *App) runClientWait(args []string) int {
 	interval := durationFlag(fs, "interval", "", 2*time.Second, "интервал опроса демона")
 	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
 	quiet := boolFlag(fs, "quiet", "q", false, "не выводить статусы")
+	strict := boolFlag(fs, "strict", "", false, "считать incomplete ошибкой")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
@@ -342,6 +343,16 @@ func (a *App) runClientWait(args []string) int {
 				if !*quiet {
 					fmt.Fprintf(a.Stderr, "%s: готово\n", o.ID)
 				}
+			case model.StateIncomplete:
+				if o.Job.Path != "" {
+					fmt.Fprintln(a.Stdout, o.Job.Path)
+				}
+				if o.Job.Warning != "" {
+					fmt.Fprintf(a.Stderr, "%s: предупреждение: %s\n", o.ID, o.Job.Warning)
+				}
+				if !*quiet {
+					fmt.Fprintf(a.Stderr, "%s: готово (incomplete)\n", o.ID)
+				}
 			case model.StateFailed:
 				fmt.Fprintf(a.Stderr, "%s: ошибка: %s\n", o.ID, o.Job.Error)
 			case model.StateCanceled:
@@ -353,7 +364,13 @@ func (a *App) runClientWait(args []string) int {
 		return 130
 	}
 	for _, o := range outcomes {
-		if o.Err != nil || o.Job.State != model.StateFound {
+		if o.Err != nil {
+			return 1
+		}
+		if o.Job.State == model.StateIncomplete && !*strict {
+			continue
+		}
+		if o.Job.State != model.StateFound {
 			return 1
 		}
 	}
@@ -369,6 +386,7 @@ func (a *App) runClientGet(args []string) int {
 	force := boolFlag(fs, "force", "f", false, "перезаписать существующий .torrent")
 	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
 	quiet := boolFlag(fs, "quiet", "q", false, "не выводить статусы")
+	strict := boolFlag(fs, "strict", "", false, "считать incomplete ошибкой")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
@@ -393,11 +411,12 @@ func (a *App) runClientGet(args []string) int {
 	outcomes := waitForJobs(ctx, client, ids, *interval, *timeout)
 
 	type getResult struct {
-		ID    string `json:"id"`
-		Name  string `json:"name,omitempty"`
-		Path  string `json:"path,omitempty"`
-		State string `json:"state"`
-		Error string `json:"error,omitempty"`
+		ID      string `json:"id"`
+		Name    string `json:"name,omitempty"`
+		Path    string `json:"path,omitempty"`
+		State   string `json:"state"`
+		Warning string `json:"warning,omitempty"`
+		Error   string `json:"error,omitempty"`
 	}
 	results := make([]getResult, 0, len(outcomes))
 	hadError := false
@@ -411,7 +430,8 @@ func (a *App) runClientGet(args []string) int {
 			continue
 		}
 		res.Name = o.Job.Name
-		if o.Job.State != model.StateFound {
+		res.Warning = o.Job.Warning
+		if o.Job.State != model.StateFound && o.Job.State != model.StateIncomplete {
 			if o.Job.State == model.StateFailed {
 				res.Error = o.Job.Error
 			} else {
@@ -421,6 +441,14 @@ func (a *App) runClientGet(args []string) int {
 			fmt.Fprintf(a.Stderr, "%s: %s\n", o.ID, res.Error)
 			hadError = true
 			continue
+		}
+		if o.Job.State == model.StateIncomplete {
+			if o.Job.Warning != "" {
+				fmt.Fprintf(a.Stderr, "%s: предупреждение: %s\n", o.ID, o.Job.Warning)
+			}
+			if *strict {
+				hadError = true
+			}
 		}
 
 		path, exists, err := fsutil.ResolveOutputPath(*out, o.Job.Name, o.Job.ID, *force)
@@ -660,6 +688,7 @@ func (a *App) runClientStats(args []string) int {
 	fmt.Fprintf(a.Stdout, "в очереди:  %d\n", s.Queued)
 	fmt.Fprintf(a.Stdout, "ищутся:     %d\n", s.Searching)
 	fmt.Fprintf(a.Stdout, "найдены:    %d\n", s.Found)
+	fmt.Fprintf(a.Stdout, "неполные:   %d\n", s.Incomplete)
 	fmt.Fprintf(a.Stdout, "ошибки:     %d\n", s.Failed)
 	fmt.Fprintf(a.Stdout, "отменены:   %d\n", s.Canceled)
 	fmt.Fprintf(a.Stdout, "активных:   %d\n", s.Active)
@@ -791,6 +820,12 @@ func waitJSON(outcomes []waitOutcome) []map[string]string {
 			item["state"] = string(o.Job.State)
 			item["path"] = o.Job.Path
 			item["name"] = o.Job.Name
+			item["version"] = o.Job.Version
+			item["info_hash_v1"] = o.Job.InfoHashV1
+			item["info_hash_v2"] = o.Job.InfoHashV2
+			if o.Job.Warning != "" {
+				item["warning"] = o.Job.Warning
+			}
 			if o.Job.Error != "" {
 				item["error"] = o.Job.Error
 			}
@@ -802,10 +837,14 @@ func waitJSON(outcomes []waitOutcome) []map[string]string {
 
 func printJobsTable(w, errW io.Writer, jobs []model.Job, total int) {
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSTATE\tATT\tSIZE\tCREATED\tNAME")
+	fmt.Fprintln(tw, "ID\tSTATE\tVER\tATT\tSIZE\tCREATED\tNAME")
 	for _, j := range jobs {
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\t%s\n",
-			j.ID, j.State, j.Attempts, formatBytes(j.Length), formatTime(j.CreatedAt), displayName(j))
+		version := j.Version
+		if version == "" {
+			version = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			j.ID, j.State, version, j.Attempts, formatBytes(j.Length), formatTime(j.CreatedAt), displayName(j))
 	}
 	tw.Flush()
 	if total > len(jobs) {
@@ -816,6 +855,15 @@ func printJobsTable(w, errW io.Writer, jobs []model.Job, total int) {
 func printJobDetail(w io.Writer, j model.Job) {
 	fmt.Fprintf(w, "ID:          %s\n", j.ID)
 	fmt.Fprintf(w, "Состояние:   %s\n", j.State)
+	if j.Version != "" {
+		fmt.Fprintf(w, "Версия:      %s\n", j.Version)
+	}
+	if j.InfoHashV1 != "" {
+		fmt.Fprintf(w, "Info hash v1: %s\n", j.InfoHashV1)
+	}
+	if j.InfoHashV2 != "" {
+		fmt.Fprintf(w, "Info hash v2: %s\n", j.InfoHashV2)
+	}
 	fmt.Fprintf(w, "Имя:         %s\n", displayName(j))
 	fmt.Fprintf(w, "Размер:      %s\n", formatBytes(j.Length))
 	fmt.Fprintf(w, "Файлов:      %d\n", j.Files)
@@ -834,8 +882,20 @@ func printJobDetail(w io.Writer, j model.Job) {
 	if j.Path != "" {
 		fmt.Fprintf(w, "Файл:        %s\n", j.Path)
 	}
+	if j.Warning != "" {
+		fmt.Fprintf(w, "Предупреждение: %s\n", j.Warning)
+	}
 	if j.Error != "" {
 		fmt.Fprintf(w, "Ошибка:      %s\n", j.Error)
+	}
+	for i, magnet := range j.Magnets {
+		if i == 0 && magnet == j.Magnet {
+			continue
+		}
+		fmt.Fprintf(w, "Magnet:      %s\n", magnet)
+	}
+	if len(j.Aliases) > 0 {
+		fmt.Fprintf(w, "Aliases:     %s\n", strings.Join(j.Aliases, ", "))
 	}
 	fmt.Fprintf(w, "Magnet:      %s\n", j.Magnet)
 }

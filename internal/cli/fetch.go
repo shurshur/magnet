@@ -13,22 +13,31 @@ import (
 	"github.com/shurshur/magnet/internal/fsutil"
 	"github.com/shurshur/magnet/internal/magnetutil"
 	"github.com/shurshur/magnet/internal/metafetch"
+	"github.com/shurshur/magnet/internal/model"
 )
 
 type fetchResult struct {
-	Link     string `json:"link"`
-	InfoHash string `json:"info_hash,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Length   int64  `json:"length,omitempty"`
-	Files    int    `json:"files,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Link       string `json:"link"`
+	InfoHash   string `json:"info_hash,omitempty"`
+	InfoHashV1 string `json:"info_hash_v1,omitempty"`
+	InfoHashV2 string `json:"info_hash_v2,omitempty"`
+	Version    string `json:"version,omitempty"`
+	State      string `json:"state,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Length     int64  `json:"length,omitempty"`
+	Files      int    `json:"files,omitempty"`
+	Warning    string `json:"warning,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 func (a *App) runFetch(args []string) int {
 	fs := newFlagSet("fetch", a.Stderr)
 	out := stringFlag(fs, "out", "o", ".", "каталог или путь к .torrent-файлу")
 	timeout := durationFlag(fs, "timeout", "t", 15*time.Minute, "таймаут поиска одной ссылки (0 — без ограничения)")
+	pieceTimeout := durationFlag(fs, "piece-layers-timeout", "", 30*time.Second, "сколько ждать piece layers для v2/hybrid (0 — не ждать)")
+	allowIncompleteV2 := boolFlag(fs, "allow-incomplete-v2", "", false, "сохранять v2 без piece layers со статусом incomplete")
+	strict := boolFlag(fs, "strict", "", false, "считать incomplete ошибкой (код 1)")
 	force := boolFlag(fs, "force", "f", false, "перезаписать существующий .torrent")
 	port := intFlag(fs, "port", "", 0, "UDP/TCP-порт DHT и peer-соединений (0 — случайный)")
 	noTrackers := boolFlag(fs, "no-trackers", "", false, "не использовать трекеры, только DHT")
@@ -39,8 +48,8 @@ func (a *App) runFetch(args []string) int {
 	if !ok {
 		return code
 	}
-	if *timeout < 0 {
-		fmt.Fprintln(a.Stderr, "magnet fetch: таймаут не может быть отрицательным")
+	if *timeout < 0 || *pieceTimeout < 0 {
+		fmt.Fprintln(a.Stderr, "magnet fetch: таймауты не могут быть отрицательными")
 		return 2
 	}
 
@@ -68,10 +77,12 @@ func (a *App) runFetch(args []string) int {
 	defer os.RemoveAll(cacheDir)
 
 	fetcher, err := metafetch.New(metafetch.Config{
-		DataDir:         cacheDir,
-		ListenPort:      *port,
-		DisableTrackers: *noTrackers,
-		Logger:          log,
+		DataDir:            cacheDir,
+		ListenPort:         *port,
+		DisableTrackers:    *noTrackers,
+		PieceLayersTimeout: *pieceTimeout,
+		AllowIncompleteV2:  *allowIncompleteV2,
+		Logger:             log,
 	})
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "magnet fetch: %v\n", err)
@@ -96,7 +107,7 @@ func (a *App) runFetch(args []string) int {
 			break
 		}
 		res := fetchResult{Link: link}
-		id, _, parseErr := magnetutil.Parse(link)
+		parsed, parseErr := magnetutil.Parse(link)
 		if parseErr != nil {
 			res.Error = parseErr.Error()
 			results = append(results, res)
@@ -104,7 +115,11 @@ func (a *App) runFetch(args []string) int {
 			fmt.Fprintf(a.Stderr, "[%d/%d] ошибка: %v\n", i+1, len(links), parseErr)
 			continue
 		}
+		id := parsed.PrimaryID
 		res.InfoHash = id
+		res.InfoHashV1 = parsed.InfoHashV1
+		res.InfoHashV2 = parsed.InfoHashV2
+		res.Version = parsed.Version
 		shortID := id
 		if len(shortID) > 12 {
 			shortID = shortID[:12]
@@ -141,6 +156,17 @@ func (a *App) runFetch(args []string) int {
 		res.Name = md.Name
 		res.Length = md.Length
 		res.Files = md.Files
+		res.InfoHashV1 = md.InfoHashV1
+		res.InfoHashV2 = md.InfoHashV2
+		res.Version = md.Version
+		res.Warning = md.Warning
+		res.State = string(model.StateFound)
+		if md.Version != model.VersionV1 && !md.PieceLayersComplete {
+			res.State = string(model.StateIncomplete)
+			if *strict {
+				hadError = true
+			}
+		}
 		path, exists, saveErr := fsutil.ResolveOutputPath(*out, md.Name, md.InfoHash, *force)
 		if saveErr != nil {
 			res.Error = saveErr.Error()
@@ -160,6 +186,9 @@ func (a *App) runFetch(args []string) int {
 		}
 		res.Path = path
 		results = append(results, res)
+		if res.Warning != "" {
+			fmt.Fprintf(a.Stderr, "[%d/%d] %s: %s\n", i+1, len(links), shortID, res.Warning)
+		}
 		if !*quiet {
 			if exists {
 				fmt.Fprintf(a.Stderr, "[%d/%d] %s: файл уже существует: %s\n", i+1, len(links), shortID, path)

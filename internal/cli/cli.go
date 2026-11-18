@@ -72,6 +72,8 @@ func (a *App) Run(args []string) int {
 		return a.runClient("retry", args)
 	case "rm", "remove", "delete":
 		return a.runClient("rm", args)
+	case "repair":
+		return a.runRepair(args)
 	case "stats":
 		return a.runClient("stats", args)
 	case "ping", "health":
@@ -100,13 +102,16 @@ func (a *App) printUsage(w io.Writer) {
   add <magnet|@file|->...     поставить ссылки в очередь
   ls                          список заданий
   show <id>...                подробности задания
-  wait <id>...                ждать завершения и вывести пути
-  get <id>...                 скачать готовые .torrent-файлы
+  wait <id>...                ждать завершения и вывести пути (--strict)
+  get <id>...                 скачать .torrent, включая incomplete (--strict)
   cancel <id>...              отменить задания
-  retry <id>...               повторить неудачные задания
+  retry <id>...               повторить failed/canceled/incomplete задания
   rm <id>...                  убрать задания из демона (--purge — с файлами)
   stats                       счётчики демона
   ping                        проверить доступность демона
+
+Обслуживание:
+  repair <file.torrent>...    восстановить недостающие piece layers у v2/hybrid
 
 Общие параметры клиента:
   --server URL                адрес демона (env MAGNET_SERVER,

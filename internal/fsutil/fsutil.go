@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/anacrolix/torrent/metainfo"
+	infohash_v2 "github.com/anacrolix/torrent/types/infohash-v2"
 )
 
 // AtomicWriteFile writes data to path using a temporary file in the same
@@ -178,5 +179,9 @@ func sameTorrent(path, infoHash string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return mi.HashInfoBytes().HexString() == infoHash, nil
+	if mi.HashInfoBytes().HexString() == infoHash {
+		return true, nil
+	}
+	h := infohash_v2.HashBytes(mi.InfoBytes)
+	return h.HexString() == infoHash, nil
 }

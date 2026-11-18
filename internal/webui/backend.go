@@ -71,10 +71,12 @@ func newEmbeddedBackend(ctx context.Context, opts Options, log *slog.Logger) (*e
 		return nil, fmt.Errorf("open state database: %w (if a daemon is already running, use --server)", err)
 	}
 	fetcher, err := metafetch.New(metafetch.Config{
-		DataDir:         cacheDir,
-		ListenPort:      opts.Port,
-		DisableTrackers: opts.DisableTrackers,
-		Logger:          log,
+		DataDir:            cacheDir,
+		ListenPort:         opts.Port,
+		DisableTrackers:    opts.DisableTrackers,
+		PieceLayersTimeout: opts.PieceLayersTimeout,
+		AllowIncompleteV2:  opts.AllowIncompleteV2,
+		Logger:             log,
 	})
 	if err != nil {
 		st.Close()

@@ -53,13 +53,17 @@ func buildTestTorrent() []byte {
 type fakeFetcher struct{}
 
 func (fakeFetcher) Fetch(_ context.Context, magnet string) (*metafetch.Metadata, error) {
-	id, _, _ := magnetutil.Parse(magnet)
+	parsed, _ := magnetutil.Parse(magnet)
 	return &metafetch.Metadata{
-		InfoHash: id,
-		Name:     "api-test",
-		Length:   1000,
-		Files:    1,
-		Torrent:  testTorrentData,
+		InfoHash:            parsed.PrimaryID,
+		InfoHashV1:          parsed.InfoHashV1,
+		InfoHashV2:          parsed.InfoHashV2,
+		Version:             parsed.Version,
+		Name:                "api-test",
+		Length:              1000,
+		Files:               1,
+		PieceLayersComplete: true,
+		Torrent:             testTorrentData,
 	}, nil
 }
 

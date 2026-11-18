@@ -9,6 +9,7 @@ import (
 
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+	infohash_v2 "github.com/anacrolix/torrent/types/infohash-v2"
 )
 
 func torrentBytes(t *testing.T, name string, length int64) []byte {
@@ -151,5 +152,40 @@ func TestAtomicWriteReader(t *testing.T) {
 	}
 	if st.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %o", st.Mode().Perm())
+	}
+}
+
+func TestResolveOutputPathV2SameHash(t *testing.T) {
+	dir := t.TempDir()
+	info := metainfo.Info{
+		PieceLength: 16 * 1024,
+		Name:        "v2.bin",
+		MetaVersion: 2,
+		FileTree: metainfo.FileTree{File: metainfo.FileTreeFile{
+			Length:     100,
+			PiecesRoot: string(make([]byte, 32)),
+		}},
+	}
+	infoBytes, err := bencode.Marshal(&info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mi := metainfo.MetaInfo{InfoBytes: infoBytes}
+	var buf bytes.Buffer
+	if err := mi.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	h := infohash_v2.HashBytes(infoBytes)
+	hash := h.HexString()
+	path := filepath.Join(dir, "v2.torrent")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, exists, err := ResolveOutputPath(path, "v2.bin", hash, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || got != path {
+		t.Fatalf("got=%q exists=%v", got, exists)
 	}
 }

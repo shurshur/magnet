@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/merkle"
 	"github.com/anacrolix/torrent/metainfo"
+	infohash_v2 "github.com/anacrolix/torrent/types/infohash-v2"
 
 	"github.com/shurshur/magnet/internal/magnetutil"
 	"github.com/shurshur/magnet/internal/metafetch"
@@ -48,13 +50,18 @@ func (f *fakeFetcher) callCount() int {
 }
 
 func successfulMetadata(magnet string) *metafetch.Metadata {
-	id, _, _ := magnetutil.Parse(magnet)
+	parsed, _ := magnetutil.Parse(magnet)
+	id := parsed.PrimaryID
 	return &metafetch.Metadata{
-		InfoHash: id,
-		Name:     "torrent-" + id[:8],
-		Length:   12345,
-		Files:    1,
-		Torrent:  testTorrentBytes("torrent-"+id[:8], 12345),
+		InfoHash:            id,
+		InfoHashV1:          parsed.InfoHashV1,
+		InfoHashV2:          parsed.InfoHashV2,
+		Version:             parsed.Version,
+		Name:                "torrent-" + id[:8],
+		Length:              12345,
+		Files:               1,
+		PieceLayersComplete: true,
+		Torrent:             testTorrentBytes("torrent-"+id[:8], 12345),
 	}
 }
 
@@ -441,5 +448,252 @@ func TestManagerImportExistingTorrent(t *testing.T) {
 	}
 	if j.State != model.StateFound || j.Name != "already-here" || j.Path == "" {
 		t.Fatalf("job = %+v", j)
+	}
+}
+
+func buildTestV2Torrent(t *testing.T, hybrid, complete bool) (data []byte, info *metainfo.Info, v1, v2 string) {
+	t.Helper()
+	content := bytes.Repeat([]byte("magnet-test-"), 4000)
+	pieceLength := int64(16 * 1024)
+	var pieceHashes [][32]byte
+	var layer bytes.Buffer
+	for off := int64(0); off < int64(len(content)); off += pieceLength {
+		end := off + pieceLength
+		if end > int64(len(content)) {
+			end = int64(len(content))
+		}
+		h := merkle.NewHash()
+		if _, err := h.Write(content[off:end]); err != nil {
+			t.Fatal(err)
+		}
+		sum := h.SumMinLength(nil, int(pieceLength))
+		var arr [32]byte
+		copy(arr[:], sum)
+		pieceHashes = append(pieceHashes, arr)
+		layer.Write(sum)
+	}
+	root := merkle.RootWithPadHash(pieceHashes, metainfo.HashForPiecePad(pieceLength))
+	name := "hybrid.bin"
+	info = &metainfo.Info{
+		PieceLength: pieceLength,
+		Name:        name,
+		MetaVersion: 2,
+		FileTree: metainfo.FileTree{File: metainfo.FileTreeFile{
+			Length:     int64(len(content)),
+			PiecesRoot: string(root[:]),
+		}},
+	}
+	if hybrid {
+		info.Length = int64(len(content))
+		pieces, err := metainfo.GeneratePieces(bytes.NewReader(content), pieceLength, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info.Pieces = pieces
+	}
+	infoBytes, err := bencode.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mi := metainfo.MetaInfo{InfoBytes: infoBytes}
+	if complete {
+		mi.PieceLayers = map[string]string{string(root[:]): layer.String()}
+	}
+	var buf bytes.Buffer
+	if err := mi.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if hybrid {
+		v1 = mi.HashInfoBytes().HexString()
+	}
+	h := infohash_v2.HashBytes(mi.InfoBytes)
+	v2 = h.HexString()
+	return buf.Bytes(), info, v1, v2
+}
+
+func v1Link(hash string) string { return "magnet:?xt=urn:btih:" + hash }
+func v2Link(hash string) string { return "magnet:?xt=urn:btmh:1220" + hash }
+
+func TestManagerHybridIncompleteIsDownloadable(t *testing.T) {
+	data, info, v1, v2 := buildTestV2Torrent(t, true, false)
+	f := &fakeFetcher{fn: func(context.Context, string) (*metafetch.Metadata, error) {
+		return &metafetch.Metadata{
+			InfoHash:            v1,
+			InfoHashV1:          v1,
+			InfoHashV2:          v2,
+			Version:             model.VersionHybrid,
+			Name:                info.Name,
+			Length:              info.TotalLength(),
+			Files:               1,
+			PieceLayersComplete: false,
+			Warning:             "piece layers are incomplete",
+			Torrent:             data,
+		}, nil
+	}}
+	env := newTestEnv(t, f, nil)
+	j, _, err := env.mgr.Add(v1Link(v1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j = waitForState(t, env.mgr, j.ID, model.StateIncomplete, 3*time.Second)
+	if j.Version != model.VersionHybrid || j.Warning == "" {
+		t.Fatalf("job = %+v", j)
+	}
+	path, _, err := env.mgr.TorrentFile(j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.mgr.Retry(j.ID); err != nil {
+		t.Fatalf("retry incomplete: %v", err)
+	}
+}
+
+func TestManagerV2Incomplete(t *testing.T) {
+	data, info, _, v2 := buildTestV2Torrent(t, false, false)
+	f := &fakeFetcher{fn: func(context.Context, string) (*metafetch.Metadata, error) {
+		return &metafetch.Metadata{
+			InfoHash:            v2,
+			InfoHashV2:          v2,
+			Version:             model.VersionV2,
+			Name:                info.Name,
+			Length:              info.TotalLength(),
+			Files:               1,
+			PieceLayersComplete: false,
+			Warning:             "piece layers are incomplete",
+			Torrent:             data,
+		}, nil
+	}}
+	env := newTestEnv(t, f, nil)
+	j, _, err := env.mgr.Add(v2Link(v2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(j.ID) != 64 {
+		t.Fatalf("v2 id = %q", j.ID)
+	}
+	j = waitForState(t, env.mgr, j.ID, model.StateIncomplete, 3*time.Second)
+	if j.Version != model.VersionV2 {
+		t.Fatalf("version = %q", j.Version)
+	}
+	if _, _, err := env.mgr.TorrentFile(j.ID); err != nil {
+		t.Fatalf("incomplete torrent is not downloadable: %v", err)
+	}
+}
+
+func TestManagerMergesSeparateV1AndV2Jobs(t *testing.T) {
+	data, info, v1, v2 := buildTestV2Torrent(t, true, true)
+	f := &fakeFetcher{fn: func(context.Context, string) (*metafetch.Metadata, error) {
+		return &metafetch.Metadata{
+			InfoHash:            v1,
+			InfoHashV1:          v1,
+			InfoHashV2:          v2,
+			Version:             model.VersionHybrid,
+			Name:                info.Name,
+			Length:              info.TotalLength(),
+			Files:               1,
+			PieceLayersComplete: true,
+			Torrent:             data,
+		}, nil
+	}}
+	env := newTestEnv(t, f, nil)
+	jobs, created, err := env.mgr.AddBatch([]string{v1Link(v1), v2Link(v2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 2 || len(jobs) != 2 {
+		t.Fatalf("created=%d jobs=%d", created, len(jobs))
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, total, err := env.mgr.List(ListOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if total == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	all, total, err := env.mgr.List(ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(all) != 1 {
+		t.Fatalf("jobs were not merged: total=%d jobs=%+v", total, all)
+	}
+	merged := all[0]
+	if len(merged.Magnets) != 2 {
+		t.Fatalf("magnets = %v", merged.Magnets)
+	}
+	byV1, err := env.mgr.Get(v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byV2, err := env.mgr.Get(v2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byV1.ID != byV2.ID || byV1.ID != merged.ID {
+		t.Fatalf("alias resolution: v1=%s v2=%s merged=%s", byV1.ID, byV2.ID, merged.ID)
+	}
+	if byV1.State != model.StateFound {
+		t.Fatalf("state = %s", byV1.State)
+	}
+}
+
+func TestManagerReusesExistingTorrentFileForOtherHash(t *testing.T) {
+	dir := t.TempDir()
+	torrentDir := filepath.Join(dir, "torrents")
+	if err := os.MkdirAll(torrentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, _, v1, v2 := buildTestV2Torrent(t, true, true)
+	path := filepath.Join(torrentDir, v2+".torrent")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(dir, "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	f := &fakeFetcher{fn: func(context.Context, string) (*metafetch.Metadata, error) {
+		return nil, errors.New("metadata fetch should not be called")
+	}}
+	mgr, err := New(Config{
+		Store:          st,
+		Fetcher:        f,
+		OutputDir:      torrentDir,
+		Workers:        1,
+		AttemptTimeout: time.Second,
+		RetryDelay:     time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	j, created, err := mgr.Add(v1Link(v1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("expected a new job")
+	}
+	if j.State != model.StateFound || j.Path != path {
+		t.Fatalf("job = %+v", j)
+	}
+	if f.callCount() != 0 {
+		t.Fatalf("fetch was called %d times", f.callCount())
+	}
+	if got, err := mgr.Get(v2); err != nil || got.ID != j.ID {
+		t.Fatalf("v2 alias lookup = %+v, %v", got, err)
 	}
 }

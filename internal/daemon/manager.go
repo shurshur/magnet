@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
+	infohash_v2 "github.com/anacrolix/torrent/types/infohash-v2"
 
 	"github.com/shurshur/magnet/internal/fsutil"
 	"github.com/shurshur/magnet/internal/magnetutil"
@@ -70,12 +72,14 @@ type Manager struct {
 	store     *store.Store
 	outputDir string
 
-	mu     sync.Mutex
-	jobs   map[string]*model.Job
-	queue  []string
-	queued map[string]struct{}
-	active map[string]activeAttempt
-	wake   chan struct{}
+	mu          sync.Mutex
+	jobs        map[string]*model.Job
+	aliases     map[string]string
+	filesByHash map[string]fileInfo
+	queue       []string
+	queued      map[string]struct{}
+	active      map[string]activeAttempt
+	wake        chan struct{}
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -84,6 +88,18 @@ type Manager struct {
 	closed    bool
 	startedAt time.Time
 	seq       uint64
+}
+
+type fileInfo struct {
+	Path       string
+	InfoHashV1 string
+	InfoHashV2 string
+	Version    string
+	Name       string
+	Length     int64
+	Files      int
+	Complete   bool
+	Warning    string
 }
 
 type activeAttempt struct {
@@ -120,19 +136,29 @@ func New(cfg Config) (*Manager, error) {
 		return nil, err
 	}
 	m := &Manager{
-		cfg:       cfg,
-		log:       cfg.Logger,
-		store:     cfg.Store,
-		outputDir: out,
-		jobs:      make(map[string]*model.Job, len(jobs)),
-		queued:    make(map[string]struct{}),
-		active:    make(map[string]activeAttempt),
-		wake:      make(chan struct{}, 1),
+		cfg:         cfg,
+		log:         cfg.Logger,
+		store:       cfg.Store,
+		outputDir:   out,
+		jobs:        make(map[string]*model.Job, len(jobs)),
+		aliases:     make(map[string]string, len(jobs)*2),
+		filesByHash: make(map[string]fileInfo),
+		queued:      make(map[string]struct{}),
+		active:      make(map[string]activeAttempt),
+		wake:        make(chan struct{}, 1),
 	}
 	for i := range jobs {
 		j := jobs[i]
+		if j.InfoHash == "" {
+			j.InfoHash = j.ID
+		}
+		if len(j.Magnets) == 0 && j.Magnet != "" {
+			j.Magnets = []string{j.Magnet}
+		}
 		m.jobs[j.ID] = &j
+		m.addJobAliasesLocked(&j)
 	}
+	m.scanOutputDirLocked()
 	return m, nil
 }
 
@@ -165,6 +191,23 @@ func (m *Manager) Start(parent context.Context) error {
 
 	for _, id := range ids {
 		j := m.jobs[id]
+		if j.Downloadable() {
+			if !m.enrichJobFromFileLocked(j, now) {
+				// The saved file is gone; queue the job again.
+				j.State = model.StateQueued
+				j.Path = ""
+				j.StartedAt = nil
+				j.FinishedAt = nil
+				j.NextAttemptAt = nil
+				j.Error = "saved torrent file is missing; queued for lookup again"
+				j.Warning = ""
+				j.UpdatedAt = now
+				changed = append(changed, *j)
+				m.enqueueLocked(id)
+				continue
+			}
+			changed = append(changed, *j)
+		}
 		switch j.State {
 		case model.StateSearching:
 			// The previous daemon process stopped mid-lookup.
@@ -182,28 +225,16 @@ func (m *Manager) Start(parent context.Context) error {
 				j.NextAttemptAt = nil
 				m.enqueueLocked(id)
 			}
-		case model.StateFound:
-			path := j.Path
-			if path == "" {
-				path = filepath.Join(m.outputDir, id+".torrent")
-				j.Path = path
-			}
-			if st, err := os.Stat(path); err != nil || st.IsDir() {
-				j.State = model.StateQueued
-				j.Path = ""
-				j.StartedAt = nil
-				j.FinishedAt = nil
-				j.NextAttemptAt = nil
-				j.Error = "saved torrent file is missing; queued for lookup again"
-				j.UpdatedAt = now
-				changed = append(changed, *j)
-				m.enqueueLocked(id)
-			}
 		}
 	}
 	if len(changed) > 0 {
 		if err := m.store.Put(changed...); err != nil {
 			m.log.Error("failed to persist resumed job state", "error", err)
+		}
+	}
+	for _, id := range ids {
+		if j, ok := m.jobs[id]; ok {
+			m.mergeClusterLocked(j)
 		}
 	}
 	queuedCount := len(m.queued)
@@ -266,19 +297,15 @@ func (m *Manager) Close() {
 
 // AddBatch validates and adds a batch of magnet links. Invalid links reject the
 // whole batch, so a client never gets a partially applied request. Duplicate
-// links (by info hash) return the existing job.
+// links (by v1/v2 info hash) return the existing job.
 func (m *Manager) AddBatch(links []string) (jobs []model.Job, created int, err error) {
-	type parsed struct {
-		link string
-		id   string
-	}
-	inputs := make([]parsed, 0, len(links))
+	inputs := make([]magnetutil.Parsed, 0, len(links))
 	for _, link := range links {
-		id, canonical, parseErr := magnetutil.Parse(link)
+		parsed, parseErr := magnetutil.Parse(link)
 		if parseErr != nil {
 			return nil, 0, &ValidationError{Link: link, Err: parseErr}
 		}
-		inputs = append(inputs, parsed{link: canonical, id: id})
+		inputs = append(inputs, parsed)
 	}
 	if len(inputs) == 0 {
 		return nil, 0, &ValidationError{Err: errors.New("no magnet links supplied")}
@@ -289,56 +316,94 @@ func (m *Manager) AddBatch(links []string) (jobs []model.Job, created int, err e
 	defer m.mu.Unlock()
 
 	results := make([]model.Job, len(inputs))
-	newJobs := make([]model.Job, 0, len(inputs))
-	newByID := make(map[string]model.Job)
+	newJobs := make(map[string]*model.Job)
+	changed := make(map[string]model.Job)
+	localAliases := make(map[string]string)
 	createdIDs := make(map[string]struct{})
 
 	for i, in := range inputs {
-		if j, ok := m.jobs[in.id]; ok {
-			results[i] = *j
-			continue
-		}
-		if j, ok := newByID[in.id]; ok {
-			results[i] = j
-			continue
-		}
-
-		var j model.Job
-		path := filepath.Join(m.outputDir, in.id+".torrent")
-		if existing, ok := m.jobFromExistingFile(in.link, in.id, path); ok {
-			j = existing
-		} else {
-			j = model.Job{
-				ID:        in.id,
-				Magnet:    in.link,
-				InfoHash:  in.id,
-				State:     model.StateQueued,
-				CreatedAt: now,
-				UpdatedAt: now,
+		hashes := in.Hashes()
+		var j *model.Job
+		for _, hash := range hashes {
+			if id, ok := localAliases[hash]; ok {
+				j = newJobs[id]
+				break
+			}
+			if id, ok := m.aliases[hash]; ok {
+				j = m.jobs[id]
+				break
 			}
 		}
-		newByID[in.id] = j
-		newJobs = append(newJobs, j)
-		createdIDs[in.id] = struct{}{}
-		results[i] = j
+		if j == nil {
+			if file, ok := m.findFileLocked(hashes); ok {
+				createdJob := m.jobFromFile(in, file)
+				newJobs[createdJob.ID] = &createdJob
+				createdIDs[createdJob.ID] = struct{}{}
+				for _, alias := range append([]string{createdJob.ID, file.InfoHashV1, file.InfoHashV2}, hashes...) {
+					if alias != "" {
+						localAliases[alias] = createdJob.ID
+					}
+				}
+				j = &createdJob
+			}
+		}
+		if j == nil {
+			createdJob := model.Job{
+				ID:         in.PrimaryID,
+				Magnet:     in.Link,
+				Magnets:    []string{in.Link},
+				InfoHash:   in.PrimaryID,
+				InfoHashV1: in.InfoHashV1,
+				InfoHashV2: in.InfoHashV2,
+				Version:    in.Version,
+				State:      model.StateQueued,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			newJobs[createdJob.ID] = &createdJob
+			createdIDs[createdJob.ID] = struct{}{}
+			for _, alias := range append([]string{createdJob.ID, in.InfoHashV1, in.InfoHashV2}, hashes...) {
+				if alias != "" {
+					localAliases[alias] = createdJob.ID
+				}
+			}
+			j = &createdJob
+		} else if _, isNew := newJobs[j.ID]; isNew {
+			m.rememberMagnetLocked(j, in.Link)
+		} else {
+			if m.rememberMagnetLocked(j, in.Link) {
+				changed[j.ID] = *j
+			}
+		}
+		results[i] = *j
 	}
 
-	if len(newJobs) > 0 {
-		if err := m.store.Put(newJobs...); err != nil {
+	toStore := make([]model.Job, 0, len(newJobs)+len(changed))
+	for _, j := range newJobs {
+		toStore = append(toStore, *j)
+	}
+	for _, j := range changed {
+		toStore = append(toStore, j)
+	}
+	if len(toStore) > 0 {
+		if err := m.store.Put(toStore...); err != nil {
 			return nil, 0, err
 		}
-		for id, j := range newByID {
-			jc := j
-			m.jobs[id] = &jc
-			if jc.State == model.StateQueued {
-				m.enqueueLocked(id)
-			}
-			m.log.Info("job added",
-				"id", id,
-				"state", jc.State,
-				"name", jc.Name,
-			)
+	}
+	for id, j := range newJobs {
+		m.jobs[id] = j
+		m.addJobAliasesLocked(j)
+		if j.State == model.StateQueued {
+			m.enqueueLocked(id)
 		}
+		m.log.Info("job added",
+			"id", id,
+			"state", j.State,
+			"name", j.Name,
+			"version", j.Version,
+		)
+	}
+	if len(newJobs) > 0 {
 		m.signalLocked()
 	}
 	return results, len(createdIDs), nil
@@ -353,54 +418,465 @@ func (m *Manager) Add(link string) (model.Job, bool, error) {
 	return jobs[0], created == 1, nil
 }
 
-func (m *Manager) jobFromExistingFile(link, id, path string) (model.Job, bool) {
+func (m *Manager) jobFromFile(in magnetutil.Parsed, file fileInfo) model.Job {
+	now := time.Now()
+	state := model.StateFound
+	if !file.Complete {
+		state = model.StateIncomplete
+	}
+	return model.Job{
+		ID:         in.PrimaryID,
+		Magnet:     in.Link,
+		Magnets:    []string{in.Link},
+		InfoHash:   in.PrimaryID,
+		InfoHashV1: file.InfoHashV1,
+		InfoHashV2: file.InfoHashV2,
+		Version:    file.Version,
+		Name:       file.Name,
+		State:      state,
+		Path:       file.Path,
+		Length:     file.Length,
+		Files:      file.Files,
+		Warning:    file.Warning,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		FinishedAt: &now,
+	}
+}
+
+func (m *Manager) rememberMagnetLocked(j *model.Job, link string) bool {
+	if link == "" {
+		return false
+	}
+	if j.Magnet == "" {
+		j.Magnet = link
+	}
+	for _, existing := range j.Magnets {
+		if existing == link {
+			return false
+		}
+	}
+	j.Magnets = append(j.Magnets, link)
+	j.UpdatedAt = time.Now()
+	return true
+}
+
+func (m *Manager) addAliasLocked(alias, id string) {
+	norm, err := magnetutil.NormalizeID(alias)
+	if err != nil || id == "" {
+		return
+	}
+	if existing, ok := m.aliases[norm]; !ok || existing == id {
+		m.aliases[norm] = id
+	}
+}
+
+func (m *Manager) addJobAliasesLocked(j *model.Job) {
+	m.addAliasLocked(j.ID, j.ID)
+	m.addAliasLocked(j.InfoHashV1, j.ID)
+	m.addAliasLocked(j.InfoHashV2, j.ID)
+	for _, alias := range j.Aliases {
+		m.addAliasLocked(alias, j.ID)
+	}
+	if base := strings.TrimSuffix(filepath.Base(j.Path), ".torrent"); base != "" {
+		m.addAliasLocked(base, j.ID)
+	}
+}
+
+func (m *Manager) resolveIDLocked(id string) (string, bool) {
+	norm, err := magnetutil.NormalizeID(id)
+	if err != nil {
+		return "", false
+	}
+	if canonical, ok := m.aliases[norm]; ok {
+		if _, exists := m.jobs[canonical]; exists {
+			return canonical, true
+		}
+	}
+	if _, ok := m.jobs[norm]; ok {
+		return norm, true
+	}
+	return "", false
+}
+
+func jobHashes(j *model.Job) []string {
+	seen := make(map[string]struct{})
+	var hashes []string
+	add := func(hash string) {
+		if hash == "" {
+			return
+		}
+		if _, ok := seen[hash]; ok {
+			return
+		}
+		seen[hash] = struct{}{}
+		hashes = append(hashes, hash)
+	}
+	add(j.ID)
+	add(j.InfoHashV1)
+	add(j.InfoHashV2)
+	for _, alias := range j.Aliases {
+		add(alias)
+	}
+	return hashes
+}
+
+func (m *Manager) scanOutputDirLocked() {
+	matches, _ := filepath.Glob(filepath.Join(m.outputDir, "*.torrent"))
+	for _, path := range matches {
+		m.indexFileLocked(path)
+	}
+}
+
+func (m *Manager) findFileLocked(hashes []string) (fileInfo, bool) {
+	var fallback fileInfo
+	found := false
+	for _, hash := range hashes {
+		norm, err := magnetutil.NormalizeID(hash)
+		if err != nil {
+			continue
+		}
+		file, ok := m.filesByHash[norm]
+		if !ok {
+			continue
+		}
+		if file.Complete {
+			return file, true
+		}
+		if !found {
+			fallback = file
+			found = true
+		}
+	}
+	return fallback, found
+}
+
+func (m *Manager) indexFileLocked(path string) (fileInfo, bool) {
 	st, err := os.Stat(path)
 	if err != nil || st.IsDir() {
-		return model.Job{}, false
+		m.unindexPathLocked(path)
+		return fileInfo{}, false
 	}
 	mi, err := metainfo.LoadFromFile(path)
 	if err != nil {
 		m.log.Warn("ignoring unreadable existing torrent file", "path", path, "error", err)
-		return model.Job{}, false
-	}
-	if mi.HashInfoBytes().HexString() != id {
-		m.log.Warn("existing torrent file has a different info hash", "path", path)
-		return model.Job{}, false
+		m.unindexPathLocked(path)
+		return fileInfo{}, false
 	}
 	info, err := mi.UnmarshalInfo()
 	if err != nil {
 		m.log.Warn("ignoring existing torrent file with invalid info", "path", path, "error", err)
-		return model.Job{}, false
+		m.unindexPathLocked(path)
+		return fileInfo{}, false
 	}
-	now := time.Now()
-	return model.Job{
-		ID:         id,
-		Magnet:     link,
-		InfoHash:   id,
-		Name:       info.Name,
-		State:      model.StateFound,
+	v1, v2 := torrentHashes(mi, &info)
+	if v1 == "" && v2 == "" {
+		return fileInfo{}, false
+	}
+	file := fileInfo{
 		Path:       path,
+		InfoHashV1: v1,
+		InfoHashV2: v2,
+		Version:    torrentVersion(&info),
+		Name:       info.BestName(),
 		Length:     info.TotalLength(),
 		Files:      len(info.UpvertedFiles()),
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		FinishedAt: &now,
-	}, true
+		Complete:   true,
+	}
+	if info.HasV2() {
+		if err := metainfo.ValidatePieceLayers(mi.PieceLayers, &info.FileTree, info.PieceLength); err != nil {
+			file.Complete = false
+			file.Warning = "piece layers are incomplete: " + err.Error()
+		}
+	}
+	m.unindexPathLocked(path)
+	if v1 != "" {
+		m.putFileIndexLocked(v1, file)
+	}
+	if v2 != "" {
+		m.putFileIndexLocked(v2, file)
+	}
+	return file, true
 }
 
-// Get returns a job by ID.
-func (m *Manager) Get(id string) (model.Job, error) {
-	norm, err := magnetutil.NormalizeID(id)
-	if err != nil {
-		return model.Job{}, ErrNotFound
+func (m *Manager) putFileIndexLocked(hash string, file fileInfo) {
+	if existing, ok := m.filesByHash[hash]; ok && existing.Path != file.Path {
+		if existing.Complete || !file.Complete {
+			return
+		}
 	}
+	m.filesByHash[hash] = file
+}
+
+func (m *Manager) unindexPathLocked(path string) {
+	for hash, file := range m.filesByHash {
+		if file.Path == path {
+			delete(m.filesByHash, hash)
+		}
+	}
+}
+
+func (m *Manager) enrichJobFromFileLocked(j *model.Job, now time.Time) bool {
+	path := j.Path
+	if path == "" {
+		path = filepath.Join(m.outputDir, j.ID+".torrent")
+	}
+	file, ok := m.indexFileLocked(path)
+	if !ok {
+		return false
+	}
+	j.Path = path
+	j.InfoHash = j.ID
+	j.InfoHashV1 = file.InfoHashV1
+	j.InfoHashV2 = file.InfoHashV2
+	j.Version = file.Version
+	j.Name = file.Name
+	j.Length = file.Length
+	j.Files = file.Files
+	j.Warning = file.Warning
+	if file.Complete {
+		j.State = model.StateFound
+		j.Warning = ""
+	} else {
+		j.State = model.StateIncomplete
+	}
+	j.UpdatedAt = now
+	m.addJobAliasesLocked(j)
+	return true
+}
+
+func torrentHashes(mi *metainfo.MetaInfo, info *metainfo.Info) (v1, v2 string) {
+	if info.HasV1() {
+		v1 = mi.HashInfoBytes().HexString()
+	}
+	if info.HasV2() {
+		h := infohash_v2.HashBytes(mi.InfoBytes)
+		v2 = h.HexString()
+	}
+	return
+}
+
+func torrentVersion(info *metainfo.Info) string {
+	switch {
+	case info.HasV1() && info.HasV2():
+		return model.VersionHybrid
+	case info.HasV2():
+		return model.VersionV2
+	default:
+		return model.VersionV1
+	}
+}
+
+func (m *Manager) jobRankLocked(j *model.Job) int {
+	if j.Downloadable() && j.Path != "" {
+		if st, err := os.Stat(j.Path); err == nil && !st.IsDir() {
+			switch j.State {
+			case model.StateFound:
+				return 4
+			case model.StateIncomplete:
+				return 3
+			}
+		}
+	}
+	switch j.State {
+	case model.StateSearching:
+		return 2
+	case model.StateQueued:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (m *Manager) mergeClusterLocked(current *model.Job) *model.Job {
+	candidates := map[string]*model.Job{current.ID: current}
+	for _, hash := range jobHashes(current) {
+		if id, ok := m.aliases[hash]; ok {
+			if j, exists := m.jobs[id]; exists {
+				candidates[j.ID] = j
+			}
+		}
+	}
+	if id, ok := m.aliases[current.ID]; ok {
+		if j, exists := m.jobs[id]; exists {
+			candidates[j.ID] = j
+		}
+	}
+	if len(candidates) == 1 {
+		m.rebuildAliasesLocked(current)
+		if err := m.store.Put(*current); err != nil {
+			m.log.Error("failed to persist completed job", "id", current.ID, "error", err)
+		}
+		return current
+	}
+
+	list := make([]*model.Job, 0, len(candidates))
+	for _, j := range candidates {
+		list = append(list, j)
+	}
+	sort.Slice(list, func(i, k int) bool {
+		ri, rk := m.jobRankLocked(list[i]), m.jobRankLocked(list[k])
+		if ri != rk {
+			return ri > rk
+		}
+		if !list[i].CreatedAt.Equal(list[k].CreatedAt) {
+			return list[i].CreatedAt.Before(list[k].CreatedAt)
+		}
+		return list[i].ID < list[k].ID
+	})
+	canonical := list[0]
+	for _, other := range list[1:] {
+		m.mergeJobLocked(canonical, other)
+	}
+	m.rebuildAliasesLocked(canonical)
+	if err := m.store.Put(*canonical); err != nil {
+		m.log.Error("failed to persist merged job", "id", canonical.ID, "error", err)
+	}
+	if canonical.Path != "" {
+		m.indexFileLocked(canonical.Path)
+	}
+	m.log.Info("jobs merged",
+		"id", canonical.ID,
+		"state", canonical.State,
+		"aliases", len(canonical.Aliases),
+		"magnets", len(canonical.Magnets),
+	)
+	return canonical
+}
+
+func (m *Manager) mergeJobLocked(canonical, other *model.Job) {
+	if other == nil || other.ID == canonical.ID {
+		return
+	}
+	if canonical.Magnet == "" {
+		canonical.Magnet = other.Magnet
+	}
+	for _, magnet := range other.Magnets {
+		m.rememberMagnetLocked(canonical, magnet)
+	}
+
+	if canonical.InfoHashV1 == "" {
+		canonical.InfoHashV1 = other.InfoHashV1
+	}
+	if canonical.InfoHashV2 == "" {
+		canonical.InfoHashV2 = other.InfoHashV2
+	}
+	if canonical.InfoHashV2 != "" {
+		for _, magnet := range canonical.Magnets {
+			if strings.Contains(magnet, "urn:btmh:") {
+				canonical.Magnet = magnet
+				break
+			}
+		}
+	}
+	if canonical.Version == "" {
+		canonical.Version = other.Version
+	}
+	if canonical.Name == "" {
+		canonical.Name = other.Name
+	}
+	if canonical.Length == 0 {
+		canonical.Length = other.Length
+	}
+	if canonical.Files == 0 {
+		canonical.Files = other.Files
+	}
+	if other.State == model.StateFound && canonical.State != model.StateFound && other.Path != "" {
+		canonical.State = other.State
+		canonical.Path = other.Path
+		canonical.Warning = ""
+	}
+	if canonical.State == model.StateIncomplete && canonical.Warning == "" {
+		canonical.Warning = other.Warning
+	}
+	if canonical.State == model.StateFound {
+		canonical.Warning = ""
+	}
+	if other.CreatedAt.Before(canonical.CreatedAt) {
+		canonical.CreatedAt = other.CreatedAt
+	}
+	if other.Attempts > canonical.Attempts {
+		canonical.Attempts = other.Attempts
+	}
+	if canonical.FinishedAt == nil {
+		canonical.FinishedAt = other.FinishedAt
+	}
+	canonical.Aliases = append(canonical.Aliases, other.ID)
+	canonical.Aliases = append(canonical.Aliases, other.Aliases...)
+	if other.InfoHashV1 != "" {
+		canonical.Aliases = append(canonical.Aliases, other.InfoHashV1)
+	}
+	if other.InfoHashV2 != "" {
+		canonical.Aliases = append(canonical.Aliases, other.InfoHashV2)
+	}
+	canonical.Aliases = uniqueStrings(canonical.Aliases)
+	canonical.InfoHash = canonical.ID
+	canonical.UpdatedAt = time.Now()
+
+	delete(m.jobs, other.ID)
+	delete(m.queued, other.ID)
+	if act, ok := m.active[other.ID]; ok {
+		act.cancel()
+		delete(m.active, other.ID)
+	}
+	if err := m.store.Delete(other.ID); err != nil {
+		m.log.Error("failed to delete merged job", "id", other.ID, "error", err)
+	}
+	if other.Path != "" && other.Path != canonical.Path {
+		m.unindexPathLocked(other.Path)
+		if m.isOutputPath(other.Path) {
+			if err := os.Remove(other.Path); err != nil && !os.IsNotExist(err) {
+				m.log.Warn("failed to remove duplicate torrent file", "path", other.Path, "error", err)
+			}
+		}
+	}
+	for alias, id := range m.aliases {
+		if id == other.ID {
+			m.aliases[alias] = canonical.ID
+		}
+	}
+}
+
+func (m *Manager) rebuildAliasesLocked(j *model.Job) {
+	for _, hash := range jobHashes(j) {
+		norm, err := magnetutil.NormalizeID(hash)
+		if err == nil {
+			m.aliases[norm] = j.ID
+		}
+	}
+	m.addJobAliasesLocked(j)
+}
+
+func (m *Manager) isOutputPath(path string) bool {
+	rel, err := filepath.Rel(m.outputDir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+// Get returns a job by ID, resolving merged aliases.
+func (m *Manager) Get(id string) (model.Job, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	j, ok := m.jobs[norm]
+	canonical, ok := m.resolveIDLocked(id)
 	if !ok {
 		return model.Job{}, ErrNotFound
 	}
-	return *j, nil
+	return *m.jobs[canonical], nil
 }
 
 // ListOptions filter and paginate job listings.
@@ -414,7 +890,8 @@ type ListOptions struct {
 func (m *Manager) List(opts ListOptions) ([]model.Job, int, error) {
 	if opts.State != "" {
 		switch opts.State {
-		case model.StateQueued, model.StateSearching, model.StateFound, model.StateFailed, model.StateCanceled:
+		case model.StateQueued, model.StateSearching, model.StateFound, model.StateIncomplete,
+			model.StateFailed, model.StateCanceled:
 		default:
 			return nil, 0, fmt.Errorf("unknown state %q", opts.State)
 		}
@@ -450,18 +927,15 @@ func (m *Manager) List(opts ListOptions) ([]model.Job, int, error) {
 
 // Cancel stops an active lookup or drops a queued job. The record is kept.
 func (m *Manager) Cancel(id string) (model.Job, error) {
-	norm, err := magnetutil.NormalizeID(id)
-	if err != nil {
-		return model.Job{}, ErrNotFound
-	}
 	m.mu.Lock()
-	j, ok := m.jobs[norm]
+	canonical, ok := m.resolveIDLocked(id)
 	if !ok {
 		m.mu.Unlock()
 		return model.Job{}, ErrNotFound
 	}
+	j := m.jobs[canonical]
 	switch j.State {
-	case model.StateFound:
+	case model.StateFound, model.StateIncomplete:
 		m.mu.Unlock()
 		return model.Job{}, ErrNotCancelable
 	case model.StateCanceled:
@@ -472,14 +946,15 @@ func (m *Manager) Cancel(id string) (model.Job, error) {
 	now := time.Now()
 	j.State = model.StateCanceled
 	j.Error = ""
+	j.Warning = ""
 	j.NextAttemptAt = nil
 	j.StartedAt = nil
 	j.FinishedAt = &now
 	j.UpdatedAt = now
-	delete(m.queued, norm)
-	act, isActive := m.active[norm]
+	delete(m.queued, canonical)
+	act, isActive := m.active[canonical]
 	if err := m.store.Put(*j); err != nil {
-		m.log.Error("failed to persist canceled job", "id", norm, "error", err)
+		m.log.Error("failed to persist canceled job", "id", canonical, "error", err)
 	}
 	cp := *j
 	m.mu.Unlock()
@@ -487,22 +962,19 @@ func (m *Manager) Cancel(id string) (model.Job, error) {
 	if isActive {
 		act.cancel()
 	}
-	m.log.Info("job canceled", "id", norm)
+	m.log.Info("job canceled", "id", canonical)
 	return cp, nil
 }
 
-// Retry re-queues a failed or canceled job.
+// Retry re-queues a failed, canceled or incomplete job.
 func (m *Manager) Retry(id string) (model.Job, error) {
-	norm, err := magnetutil.NormalizeID(id)
-	if err != nil {
-		return model.Job{}, ErrNotFound
-	}
 	m.mu.Lock()
-	j, ok := m.jobs[norm]
+	canonical, ok := m.resolveIDLocked(id)
 	if !ok {
 		m.mu.Unlock()
 		return model.Job{}, ErrNotFound
 	}
+	j := m.jobs[canonical]
 	switch j.State {
 	case model.StateQueued, model.StateSearching, model.StateFound:
 		m.mu.Unlock()
@@ -511,41 +983,47 @@ func (m *Manager) Retry(id string) (model.Job, error) {
 	now := time.Now()
 	j.State = model.StateQueued
 	j.Error = ""
+	j.Warning = ""
 	j.Attempts = 0
 	j.StartedAt = nil
 	j.FinishedAt = nil
 	j.NextAttemptAt = nil
 	j.UpdatedAt = now
 	if err := m.store.Put(*j); err != nil {
-		m.log.Error("failed to persist retried job", "id", norm, "error", err)
+		m.log.Error("failed to persist retried job", "id", canonical, "error", err)
 	}
-	m.enqueueLocked(norm)
+	m.enqueueLocked(canonical)
 	cp := *j
 	m.mu.Unlock()
 	m.signal()
-	m.log.Info("job queued for retry", "id", norm)
+	m.log.Info("job queued for retry", "id", canonical, "state", cp.State)
 	return cp, nil
 }
 
 // Delete cancels (if needed) and removes a job. With purge it also deletes the
 // saved .torrent file.
 func (m *Manager) Delete(id string, purge bool) error {
-	norm, err := magnetutil.NormalizeID(id)
-	if err != nil {
-		return ErrNotFound
-	}
 	m.mu.Lock()
-	j, ok := m.jobs[norm]
+	canonical, ok := m.resolveIDLocked(id)
 	if !ok {
 		m.mu.Unlock()
 		return ErrNotFound
 	}
+	j := m.jobs[canonical]
 	path := j.Path
-	act, isActive := m.active[norm]
-	delete(m.jobs, norm)
-	delete(m.queued, norm)
-	if err := m.store.Delete(norm); err != nil {
-		m.log.Error("failed to delete job from store", "id", norm, "error", err)
+	act, isActive := m.active[canonical]
+	delete(m.jobs, canonical)
+	delete(m.queued, canonical)
+	for alias, target := range m.aliases {
+		if target == canonical {
+			delete(m.aliases, alias)
+		}
+	}
+	if err := m.store.Delete(canonical); err != nil {
+		m.log.Error("failed to delete job from store", "id", canonical, "error", err)
+	}
+	if purge {
+		m.unindexPathLocked(path)
 	}
 	m.mu.Unlock()
 
@@ -557,23 +1035,21 @@ func (m *Manager) Delete(id string, purge bool) error {
 			m.log.Warn("failed to remove torrent file", "path", path, "error", err)
 		}
 	}
-	m.log.Info("job removed", "id", norm, "purge", purge)
+	m.log.Info("job removed", "id", canonical, "purge", purge)
 	return nil
 }
 
-// TorrentFile returns the path and suggested file name for a completed job.
+// TorrentFile returns the path and suggested file name for a job with saved
+// metadata. Incomplete v2/hybrid torrents are downloadable too.
 func (m *Manager) TorrentFile(id string) (path, name string, err error) {
-	norm, err := magnetutil.NormalizeID(id)
-	if err != nil {
-		return "", "", ErrNotFound
-	}
 	m.mu.Lock()
-	j, ok := m.jobs[norm]
+	canonical, ok := m.resolveIDLocked(id)
 	if !ok {
 		m.mu.Unlock()
 		return "", "", ErrNotFound
 	}
-	if j.State != model.StateFound || j.Path == "" {
+	j := m.jobs[canonical]
+	if j.Path == "" {
 		m.mu.Unlock()
 		return "", "", ErrNotReady
 	}
@@ -589,13 +1065,14 @@ func (m *Manager) TorrentFile(id string) (path, name string, err error) {
 
 // Stats summarizes the job states.
 type Stats struct {
-	Total     int `json:"total"`
-	Queued    int `json:"queued"`
-	Searching int `json:"searching"`
-	Found     int `json:"found"`
-	Failed    int `json:"failed"`
-	Canceled  int `json:"canceled"`
-	Active    int `json:"active"`
+	Total      int `json:"total"`
+	Queued     int `json:"queued"`
+	Searching  int `json:"searching"`
+	Found      int `json:"found"`
+	Incomplete int `json:"incomplete"`
+	Failed     int `json:"failed"`
+	Canceled   int `json:"canceled"`
+	Active     int `json:"active"`
 }
 
 // Stats returns current job counters.
@@ -611,6 +1088,8 @@ func (m *Manager) Stats() Stats {
 			s.Searching++
 		case model.StateFound:
 			s.Found++
+		case model.StateIncomplete:
+			s.Incomplete++
 		case model.StateFailed:
 			s.Failed++
 		case model.StateCanceled:
@@ -675,6 +1154,7 @@ func (m *Manager) claim() (attempt, bool) {
 		j.UpdatedAt = now
 		j.NextAttemptAt = nil
 		j.Error = ""
+		j.Warning = ""
 		if err := m.store.Put(*j); err != nil {
 			m.log.Error("failed to persist started job", "id", id, "error", err)
 		}
@@ -722,17 +1202,21 @@ func (m *Manager) runAttempt(att attempt) {
 	if err == nil && md == nil {
 		err = errors.New("metadata fetcher returned nil result")
 	}
-	if err == nil && md.InfoHash != "" && md.InfoHash != att.job.ID {
-		err = fmt.Errorf("metadata info hash mismatch: got %s, want %s", md.InfoHash, att.job.ID)
+	if err == nil && !metadataMatchesJob(md, att.job.ID) {
+		err = fmt.Errorf("metadata hashes do not match job %s (v1=%s v2=%s)", att.job.ID, md.InfoHashV1, md.InfoHashV2)
 	}
 	if err == nil {
-		m.finishFound(att, md)
+		m.finishMetadata(att, md)
 		return
 	}
 	m.finishFailed(att, err)
 }
 
-func (m *Manager) finishFound(att attempt, md *metafetch.Metadata) {
+func metadataMatchesJob(md *metafetch.Metadata, id string) bool {
+	return id == md.InfoHash || id == md.InfoHashV1 || id == md.InfoHashV2
+}
+
+func (m *Manager) finishMetadata(att attempt, md *metafetch.Metadata) {
 	path := filepath.Join(m.outputDir, att.job.ID+".torrent")
 
 	m.mu.Lock()
@@ -746,26 +1230,40 @@ func (m *Manager) finishFound(att attempt, md *metafetch.Metadata) {
 		m.scheduleRetryLocked(att, err)
 		return
 	}
+	state := model.StateFound
+	warning := ""
+	if md.Version != model.VersionV1 && !md.PieceLayersComplete {
+		state = model.StateIncomplete
+		warning = md.Warning
+	}
 	now := time.Now()
-	j.State = model.StateFound
+	j.State = state
 	j.Name = md.Name
 	j.Path = path
 	j.Length = md.Length
 	j.Files = md.Files
+	j.InfoHash = j.ID
+	j.InfoHashV1 = md.InfoHashV1
+	j.InfoHashV2 = md.InfoHashV2
+	j.Version = md.Version
 	j.Error = ""
+	j.Warning = warning
 	j.NextAttemptAt = nil
 	j.FinishedAt = &now
 	j.UpdatedAt = now
-	if err := m.store.Put(*j); err != nil {
-		m.log.Error("failed to persist completed job", "id", att.job.ID, "error", err)
-	}
+	m.addJobAliasesLocked(j)
+	m.indexFileLocked(path)
+	target := m.mergeClusterLocked(j)
 	m.log.Info("metadata found",
-		"id", att.job.ID,
-		"name", md.Name,
-		"length", md.Length,
-		"files", md.Files,
-		"path", path,
-		"attempt", j.Attempts,
+		"id", target.ID,
+		"version", target.Version,
+		"state", target.State,
+		"name", target.Name,
+		"length", target.Length,
+		"files", target.Files,
+		"path", target.Path,
+		"piece_layers_complete", target.State == model.StateFound || target.Version == model.VersionV1,
+		"attempt", target.Attempts,
 	)
 }
 
@@ -818,6 +1316,7 @@ func (m *Manager) scheduleRetryLocked(att attempt, fetchErr error) {
 		next := now.Add(m.cfg.RetryDelay)
 		j.State = model.StateQueued
 		j.Error = msg
+		j.Warning = ""
 		j.StartedAt = nil
 		j.NextAttemptAt = &next
 		j.UpdatedAt = now
@@ -836,6 +1335,7 @@ func (m *Manager) scheduleRetryLocked(att attempt, fetchErr error) {
 
 	j.State = model.StateFailed
 	j.Error = msg
+	j.Warning = ""
 	j.StartedAt = nil
 	j.NextAttemptAt = nil
 	j.FinishedAt = &now

@@ -92,7 +92,7 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	state := model.State(strings.TrimSpace(q.Get("state")))
 	switch state {
-	case "", model.StateQueued, model.StateSearching, model.StateFound, model.StateFailed, model.StateCanceled:
+	case "", model.StateQueued, model.StateSearching, model.StateFound, model.StateIncomplete, model.StateFailed, model.StateCanceled:
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_state", "unknown state "+string(state))
 		return

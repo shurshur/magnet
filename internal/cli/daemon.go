@@ -29,6 +29,8 @@ func (a *App) runDaemon(args []string) int {
 	attemptTimeout := durationFlag(fs, "attempt-timeout", "", 15*time.Minute, "таймаут одной попытки поиска (0 — без ограничения)")
 	retryDelay := durationFlag(fs, "retry-delay", "", 30*time.Second, "пауза перед повторной попыткой")
 	maxAttempts := intFlag(fs, "max-attempts", "", 0, "максимум попыток на ссылку (0 — без ограничения)")
+	pieceTimeout := durationFlag(fs, "piece-layers-timeout", "", 30*time.Second, "сколько ждать piece layers для v2/hybrid (0 — не ждать)")
+	allowIncompleteV2 := boolFlag(fs, "allow-incomplete-v2", "", false, "сохранять v2 без piece layers со статусом incomplete")
 	port := intFlag(fs, "port", "", 0, "UDP/TCP-порт DHT и peer-соединений (0 — случайный)")
 	noTrackers := boolFlag(fs, "no-trackers", "", false, "не использовать трекеры, только DHT")
 	logLevel := stringFlag(fs, "log-level", "", "info", "уровень лога: debug, info, warn, error")
@@ -41,8 +43,8 @@ func (a *App) runDaemon(args []string) int {
 		fmt.Fprintln(a.Stderr, "magnet daemon: --workers должен быть больше нуля")
 		return 2
 	}
-	if *attemptTimeout < 0 {
-		fmt.Fprintln(a.Stderr, "magnet daemon: --attempt-timeout не может быть отрицательным")
+	if *attemptTimeout < 0 || *pieceTimeout < 0 {
+		fmt.Fprintln(a.Stderr, "magnet daemon: таймауты не могут быть отрицательными")
 		return 2
 	}
 	if *retryDelay < 0 {
@@ -91,10 +93,12 @@ func (a *App) runDaemon(args []string) int {
 	defer st.Close()
 
 	fetcher, err := metafetch.New(metafetch.Config{
-		DataDir:         cacheDir,
-		ListenPort:      *port,
-		DisableTrackers: *noTrackers,
-		Logger:          log,
+		DataDir:            cacheDir,
+		ListenPort:         *port,
+		DisableTrackers:    *noTrackers,
+		PieceLayersTimeout: *pieceTimeout,
+		AllowIncompleteV2:  *allowIncompleteV2,
+		Logger:             log,
 	})
 	if err != nil {
 		fmt.Fprintf(a.Stderr, "magnet daemon: %v\n", err)
