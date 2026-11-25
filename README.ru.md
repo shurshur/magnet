@@ -34,6 +34,51 @@ web-интерфейсом. Он может подключиться к запу
 - Необязательный API-токен. По умолчанию демон слушает только `127.0.0.1`.
 - JSON-вывод для сценариев (`--json`).
 
+## Релизы
+
+Готовые архивы для Linux, Windows и macOS публикуются на странице
+[Releases](https://github.com/shurshur/magnet/releases). Первый релиз — `v0.1.0`.
+
+В каждом архиве лежат `magnet` и `magnet-web`, а также `LICENSE` и
+`THIRD_PARTY_NOTICES.md`. К каждому релизу прилагается `SHA256SUMS`:
+
+```sh
+curl -LO https://github.com/shurshur/magnet/releases/download/v0.1.0/magnet-v0.1.0-linux-amd64.tar.gz
+curl -LO https://github.com/shurshur/magnet/releases/download/v0.1.0/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf magnet-v0.1.0-linux-amd64.tar.gz
+sudo install -m 0755 magnet magnet-web /usr/local/bin/
+```
+
+Замените `linux-amd64` на `linux-arm64`, `darwin-amd64`, `darwin-arm64`,
+`windows-amd64` или `windows-arm64`. Windows-архивы имеют расширение `.zip`.
+В macOS проверяйте контрольные суммы командой
+`shasum -a 256 -c SHA256SUMS --ignore-missing`.
+
+Релизы собираются в GitHub Actions с помощью GoReleaser. Версия берётся из
+git-тега: `magnet --version` и `magnet-web --version` показывают её.
+
+Чтобы выпустить релиз:
+
+1. Убедитесь, что CI на `master` зелёный.
+2. Создайте и отправьте SemVer-тег:
+
+   ```sh
+   git tag -a v0.1.0 -m "magnet v0.1.0"
+   git push origin v0.1.0
+   ```
+
+3. Workflow `Release` соберёт архивы для Linux, Windows и macOS (`amd64` и
+   `arm64`), создаст `SHA256SUMS` и опубликует GitHub Release.
+
+Проверить релизную сборку локально без публикации:
+
+```sh
+goreleaser release --snapshot --clean
+```
+
+Артефакты появятся в `dist/`.
+
 ## Сборка
 
 Нужен Go 1.23+.
@@ -99,6 +144,10 @@ make build-all VERSION=v1.0.0
 Кросс-сборка выполняется с `CGO_ENABLED=0`, поэтому не нужен C-компилятор и
 соответствующие toolchain'ы. Torrent-клиент в этом режиме использует pure-Go реализацию uTP;
 DHT, TCP и загрузка метаданных работают полноценно.
+
+`make build-all` создаёт отдельные бинарники для локального использования.
+Релизные архивы для распространения собираются отдельно в GoReleaser, как
+описано выше.
 
 ## Режим 1: разовое скачивание
 

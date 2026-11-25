@@ -35,6 +35,52 @@ engine itself — no Node.js, WebView, or CGO required.
 - Optional API token. By default the daemon listens on `127.0.0.1` only.
 - JSON output for scripting (`--json`).
 
+## Releases
+
+Ready-to-use archives for Linux, Windows, and macOS are published on the
+[Releases](https://github.com/shurshur/magnet/releases) page. The first release
+is `v0.1.0`.
+
+Each archive contains both `magnet` and `magnet-web`, plus `LICENSE` and
+`THIRD_PARTY_NOTICES.md`. Every release also includes `SHA256SUMS`:
+
+```sh
+curl -LO https://github.com/shurshur/magnet/releases/download/v0.1.0/magnet-v0.1.0-linux-amd64.tar.gz
+curl -LO https://github.com/shurshur/magnet/releases/download/v0.1.0/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf magnet-v0.1.0-linux-amd64.tar.gz
+sudo install -m 0755 magnet magnet-web /usr/local/bin/
+```
+
+Replace `linux-amd64` with `linux-arm64`, `darwin-amd64`, `darwin-arm64`,
+`windows-amd64`, or `windows-arm64` as needed. Windows archives use `.zip`.
+On macOS, verify checksums with
+`shasum -a 256 -c SHA256SUMS --ignore-missing`.
+
+Releases are built by GitHub Actions with GoReleaser. The version comes from
+the git tag: `magnet --version` and `magnet-web --version` print it.
+
+To publish a release:
+
+1. Make sure CI is green on `master`.
+2. Create and push a SemVer tag:
+
+   ```sh
+   git tag -a v0.1.0 -m "magnet v0.1.0"
+   git push origin v0.1.0
+   ```
+
+3. The `Release` workflow builds Linux, Windows, and macOS archives for
+   `amd64` and `arm64`, generates `SHA256SUMS`, and publishes a GitHub Release.
+
+To verify the release build locally without publishing:
+
+```sh
+goreleaser release --snapshot --clean
+```
+
+Artifacts are written to `dist/`.
+
 ## Build
 
 Go 1.23+ is required.
@@ -100,6 +146,9 @@ make build-all VERSION=v1.0.0
 Cross-compilation uses `CGO_ENABLED=0`, so no C compiler or platform
 toolchains are required. In this mode the torrent client uses the pure-Go uTP
 implementation; DHT, TCP, and metadata retrieval work fully.
+
+`make build-all` produces flat binaries for local use. Release archives for
+distribution are built separately by GoReleaser as described above.
 
 ## Mode 1: one-shot download
 

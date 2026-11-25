@@ -1,0 +1,78 @@
+version: 2
+
+project_name: magnet
+
+builds:
+  - id: magnet
+    main: ./cmd/magnet
+    binary: magnet
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version=v{{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+  - id: magnet-web
+    main: ./cmd/magnet-web
+    binary: magnet-web
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version=v{{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: release
+    ids:
+      - magnet
+      - magnet-web
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}-v{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - THIRD_PARTY_NOTICES.md
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  prerelease: auto
+  draft: false
+  footer: |
+    **Verify checksums:** `sha256sum -c SHA256SUMS --ignore-missing`
+
+    On macOS: `shasum -a 256 -c SHA256SUMS --ignore-missing`
