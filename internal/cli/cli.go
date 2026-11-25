@@ -79,46 +79,46 @@ func (a *App) Run(args []string) int {
 	case "ping", "health":
 		return a.runClient("ping", args)
 	default:
-		fmt.Fprintf(a.Stderr, "magnet: неизвестная команда %q\n\n", cmd)
+		fmt.Fprintf(a.Stderr, "magnet: unknown command %q\n\n", cmd)
 		a.printUsage(a.Stderr)
 		return 2
 	}
 }
 
 func (a *App) printUsage(w io.Writer) {
-	fmt.Fprint(w, `magnet — поиск .torrent-файлов в DHT по magnet-ссылкам
+	fmt.Fprint(w, `magnet — find .torrent files in the DHT by magnet link
 
-Использование:
-  magnet <команда> [параметры]
+Usage:
+  magnet <command> [options]
 
-Разовый режим:
-  fetch <magnet|@file|->...   найти метаданные и сохранить .torrent
-                              (несколько ссылок, файлы @file и stdin через -)
+One-shot mode:
+  fetch <magnet|@file|->...   fetch metadata and save a .torrent
+                              (multiple links, @file lists, and stdin via -)
 
-Демон:
-  daemon                      запустить долгоживущий демон с HTTP API
+Daemon:
+  daemon                      start the long-running daemon with an HTTP API
 
-Клиент демона (те же команды доступны как "magnet client <команда>"):
-  add <magnet|@file|->...     поставить ссылки в очередь
-  ls                          список заданий
-  show <id>...                подробности задания
-  wait <id>...                ждать завершения и вывести пути (--strict)
-  get <id>...                 скачать .torrent, включая incomplete (--strict)
-  cancel <id>...              отменить задания
-  retry <id>...               повторить failed/canceled/incomplete задания
-  rm <id>...                  убрать задания из демона (--purge — с файлами)
-  stats                       счётчики демона
-  ping                        проверить доступность демона
+Daemon client (the same commands are available as "magnet client <command>"):
+  add <magnet|@file|->...     queue links
+  ls                          list jobs
+  show <id>...                show job details
+  wait <id>...                wait for completion and print paths (--strict)
+  get <id>...                 download .torrent files, including incomplete (--strict)
+  cancel <id>...              cancel jobs
+  retry <id>...               retry failed/canceled/incomplete jobs
+  rm <id>...                  remove jobs from the daemon (--purge also removes files)
+  stats                       daemon counters
+  ping                        check that the daemon is reachable
 
-Обслуживание:
-  repair <file.torrent>...    восстановить недостающие piece layers у v2/hybrid
+Maintenance:
+  repair <file.torrent>...    restore missing v2/hybrid piece layers
 
-Общие параметры клиента:
-  --server URL                адрес демона (env MAGNET_SERVER,
-                              по умолчанию http://127.0.0.1:8787)
-  --token TOKEN               API-токен (env MAGNET_API_TOKEN)
+Common client options:
+  --server URL                daemon URL (env MAGNET_SERVER,
+                              default http://127.0.0.1:8787)
+  --token TOKEN               API token (env MAGNET_API_TOKEN)
 
-Примеры:
+Examples:
   magnet fetch 'magnet:?xt=urn:btih:...'
   cat links.txt | magnet fetch -o downloads/ -
   magnet daemon --data-dir ~/.local/state/magnet
@@ -126,7 +126,7 @@ func (a *App) printUsage(w io.Writer) {
   magnet wait 0123456789abcdef0123456789abcdef01234567
   magnet get -o downloads/ 0123456789abcdef0123456789abcdef01234567
 
-Запустите "magnet <команда> -h" для параметров конкретной команды.
+Run "magnet <command> -h" for command-specific options.
 `)
 }
 
@@ -260,13 +260,13 @@ func readLinks(args []string, stdin io.Reader) ([]string, error) {
 
 	if len(args) == 0 {
 		if stdinIsTerminal(stdin) {
-			return nil, errors.New("не задано ни одной magnet-ссылки")
+			return nil, errors.New("no magnet links provided")
 		}
 		if err := readAll(stdin); err != nil {
-			return nil, fmt.Errorf("чтение stdin: %w", err)
+			return nil, fmt.Errorf("reading stdin: %w", err)
 		}
 		if len(links) == 0 {
-			return nil, errors.New("на stdin нет magnet-ссылок")
+			return nil, errors.New("no magnet links found on stdin")
 		}
 		return links, nil
 	}
@@ -275,28 +275,28 @@ func readLinks(args []string, stdin io.Reader) ([]string, error) {
 		switch {
 		case arg == "-":
 			if err := readAll(stdin); err != nil {
-				return nil, fmt.Errorf("чтение stdin: %w", err)
+				return nil, fmt.Errorf("reading stdin: %w", err)
 			}
 		case strings.HasPrefix(arg, "@"):
 			path := strings.TrimPrefix(arg, "@")
 			if path == "" {
-				return nil, errors.New("пустое имя файла после @")
+				return nil, errors.New("empty file name after @")
 			}
 			f, err := os.Open(path)
 			if err != nil {
-				return nil, fmt.Errorf("открытие %s: %w", path, err)
+				return nil, fmt.Errorf("opening %s: %w", path, err)
 			}
 			err = readAll(f)
 			f.Close()
 			if err != nil {
-				return nil, fmt.Errorf("чтение %s: %w", path, err)
+				return nil, fmt.Errorf("reading %s: %w", path, err)
 			}
 		default:
 			links = append(links, strings.TrimSpace(arg))
 		}
 	}
 	if len(links) == 0 {
-		return nil, errors.New("не найдено ни одной magnet-ссылки")
+		return nil, errors.New("no magnet links found")
 	}
 	return links, nil
 }

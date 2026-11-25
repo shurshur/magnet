@@ -292,3 +292,26 @@ tbody tr:hover { background: color-mix(in srgb, var(--bg-soft) 65%, transparent)
   table { min-width: 560px; }
   .toast { right: 12px; bottom: 12px; }
 }
+
+.language-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.language-picker select {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .language-picker span { display: none; }
+}

@@ -32,22 +32,22 @@ func run(args []string) int {
 	opts := webui.Options{}
 	var showVersion bool
 	var logLevel string
-	fs.StringVar(&opts.Server, "server", env("MAGNET_SERVER"), "подключиться к демону по URL (по умолчанию — автоопределение 127.0.0.1:8787)")
-	fs.StringVar(&opts.APIToken, "api-token", env("MAGNET_API_TOKEN"), "API-токен демона (env MAGNET_API_TOKEN)")
-	fs.BoolVar(&opts.Embedded, "embedded", false, "всегда запускать встроенный движок, не искать демон")
-	fs.StringVar(&opts.Listen, "listen", "127.0.0.1:0", "адрес локального web-интерфейса")
-	fs.StringVar(&opts.DataDir, "data-dir", appdirs.DefaultDataDir(), "каталог данных встроенного движка")
-	fs.IntVar(&opts.Workers, "workers", 4, "число одновременных поисков")
-	fs.DurationVar(&opts.AttemptTimeout, "attempt-timeout", 15*time.Minute, "таймаут одной попытки (0 — без ограничения)")
-	fs.DurationVar(&opts.RetryDelay, "retry-delay", 30*time.Second, "пауза перед повторной попыткой")
-	fs.DurationVar(&opts.PieceLayersTimeout, "piece-layers-timeout", 30*time.Second, "сколько ждать piece layers для v2/hybrid (0 — не ждать)")
-	fs.BoolVar(&opts.AllowIncompleteV2, "allow-incomplete-v2", false, "сохранять v2 без piece layers со статусом incomplete")
-	fs.IntVar(&opts.MaxAttempts, "max-attempts", 0, "максимум попыток на ссылку (0 — без ограничения)")
-	fs.IntVar(&opts.Port, "port", 0, "UDP/TCP-порт DHT и peer-соединений (0 — случайный)")
-	fs.BoolVar(&opts.DisableTrackers, "no-trackers", false, "не использовать трекеры, только DHT")
-	fs.BoolVar(&opts.NoBrowser, "no-browser", false, "не открывать браузер автоматически")
-	fs.StringVar(&logLevel, "log-level", "info", "уровень лога: debug, info, warn, error")
-	fs.BoolVar(&showVersion, "version", false, "показать версию и выйти")
+	fs.StringVar(&opts.Server, "server", env("MAGNET_SERVER"), "connect to a daemon at URL (default: auto-detect 127.0.0.1:8787)")
+	fs.StringVar(&opts.APIToken, "api-token", env("MAGNET_API_TOKEN"), "daemon API token (env MAGNET_API_TOKEN)")
+	fs.BoolVar(&opts.Embedded, "embedded", false, "always start the embedded engine; do not look for a daemon")
+	fs.StringVar(&opts.Listen, "listen", "127.0.0.1:0", "local web UI listen address")
+	fs.StringVar(&opts.DataDir, "data-dir", appdirs.DefaultDataDir(), "data directory for the embedded engine")
+	fs.IntVar(&opts.Workers, "workers", 4, "number of concurrent searches")
+	fs.DurationVar(&opts.AttemptTimeout, "attempt-timeout", 15*time.Minute, "timeout for one attempt (0 = unlimited)")
+	fs.DurationVar(&opts.RetryDelay, "retry-delay", 30*time.Second, "delay before retrying")
+	fs.DurationVar(&opts.PieceLayersTimeout, "piece-layers-timeout", 30*time.Second, "how long to wait for v2/hybrid piece layers (0 = do not wait)")
+	fs.BoolVar(&opts.AllowIncompleteV2, "allow-incomplete-v2", false, "save v2 without piece layers with incomplete status")
+	fs.IntVar(&opts.MaxAttempts, "max-attempts", 0, "maximum attempts per link (0 = unlimited)")
+	fs.IntVar(&opts.Port, "port", 0, "UDP/TCP port for DHT and peer connections (0 = random)")
+	fs.BoolVar(&opts.DisableTrackers, "no-trackers", false, "do not use trackers; DHT only")
+	fs.BoolVar(&opts.NoBrowser, "no-browser", false, "do not open the browser automatically")
+	fs.StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
+	fs.BoolVar(&showVersion, "version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -59,19 +59,19 @@ func run(args []string) int {
 		return 0
 	}
 	if opts.Server != "" && opts.Embedded {
-		fmt.Fprintln(os.Stderr, "magnet-web: --server и --embedded нельзя использовать вместе")
+		fmt.Fprintln(os.Stderr, "magnet-web: --server and --embedded cannot be used together")
 		return 2
 	}
 	if opts.Workers < 1 {
-		fmt.Fprintln(os.Stderr, "magnet-web: --workers должен быть больше нуля")
+		fmt.Fprintln(os.Stderr, "magnet-web: --workers must be greater than zero")
 		return 2
 	}
 	if opts.AttemptTimeout < 0 || opts.RetryDelay < 0 || opts.PieceLayersTimeout < 0 || opts.MaxAttempts < 0 {
-		fmt.Fprintln(os.Stderr, "magnet-web: таймауты и --max-attempts не могут быть отрицательными")
+		fmt.Fprintln(os.Stderr, "magnet-web: timeouts and --max-attempts cannot be negative")
 		return 2
 	}
 	if opts.Port < 0 || opts.Port > 65535 {
-		fmt.Fprintln(os.Stderr, "magnet-web: --port должен быть в диапазоне 0..65535")
+		fmt.Fprintln(os.Stderr, "magnet-web: --port must be in the range 0..65535")
 		return 2
 	}
 	level, err := parseLogLevel(logLevel)
@@ -94,21 +94,21 @@ func run(args []string) int {
 }
 
 func usage(fs *flag.FlagSet) {
-	fmt.Fprintf(fs.Output(), `magnet-web — локальный web-интерфейс для magnet
+	fmt.Fprintf(fs.Output(), `magnet-web — local web interface for magnet
 
-Использование:
-  magnet-web [параметры]
+Usage:
+  magnet-web [options]
 
-По умолчанию web UI проверяет наличие демона на http://127.0.0.1:8787. Если он запущен,
-интерфейс подключается к нему. Иначе запускается встроенный движок.
+By default the web UI checks for a daemon at http://127.0.0.1:8787. If one is running,
+it connects to it. Otherwise it starts the embedded engine.
 
-Примеры:
+Examples:
   magnet-web
   magnet-web --no-browser --listen 127.0.0.1:9090
   magnet-web --server http://127.0.0.1:8787 --api-token secret
   magnet-web --embedded --data-dir ~/.local/state/magnet-web
 
-Параметры:
+Options:
 `)
 	fs.PrintDefaults()
 }
@@ -124,7 +124,7 @@ func parseLogLevel(s string) (slog.Level, error) {
 	case "error":
 		return slog.LevelError, nil
 	default:
-		return 0, fmt.Errorf("неизвестный --log-level %q", s)
+		return 0, fmt.Errorf("unknown --log-level %q", s)
 	}
 }
 

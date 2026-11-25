@@ -43,29 +43,29 @@ func (a *App) runClient(cmd string, args []string) int {
 	case "ping", "health":
 		return a.runClientPing(args)
 	default:
-		fmt.Fprintf(a.Stderr, "magnet client: неизвестная команда %q\n", cmd)
+		fmt.Fprintf(a.Stderr, "magnet client: unknown command %q\n", cmd)
 		return 2
 	}
 }
 
 func clientConnFlags(fs *flag.FlagSet) (*string, *string) {
-	server := stringFlag(fs, "server", "s", defaultServer(), "адрес демона")
-	token := stringFlag(fs, "token", "", defaultToken(), "API-токен")
+	server := stringFlag(fs, "server", "s", defaultServer(), "daemon URL")
+	token := stringFlag(fs, "token", "", defaultToken(), "API token")
 	return server, token
 }
 
 func (a *App) runClientAdd(args []string) int {
 	fs := newFlagSet("add", a.Stderr)
 	server, token := clientConnFlags(fs)
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
-	quiet := boolFlag(fs, "quiet", "q", false, "выводить только ID")
-	batchSize := intFlag(fs, "batch-size", "", 500, "размер пакета при массовой постановке")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
+	quiet := boolFlag(fs, "quiet", "q", false, "print only IDs")
+	batchSize := intFlag(fs, "batch-size", "", 500, "batch size for bulk add")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	if *batchSize < 1 {
-		fmt.Fprintln(a.Stderr, "magnet add: --batch-size должен быть больше нуля")
+		fmt.Fprintln(a.Stderr, "magnet add: --batch-size must be greater than zero")
 		return 2
 	}
 	links, err := readLinks(fs.Args(), a.Stdin)
@@ -173,7 +173,7 @@ func (a *App) runClientAdd(args []string) int {
 		}
 		tw.Flush()
 	}
-	fmt.Fprintf(a.Stderr, "добавлено: %d, уже было: %d, ошибок: %d\n", created, existing, len(failures))
+	fmt.Fprintf(a.Stderr, "added: %d, existing: %d, errors: %d\n", created, existing, len(failures))
 	if ctx.Err() != nil {
 		return 130
 	}
@@ -186,17 +186,17 @@ func (a *App) runClientAdd(args []string) int {
 func (a *App) runClientList(args []string) int {
 	fs := newFlagSet("ls", a.Stderr)
 	server, token := clientConnFlags(fs)
-	state := stringFlag(fs, "state", "", "", "фильтр по состоянию: queued, searching, found, incomplete, failed, canceled")
-	limit := intFlag(fs, "limit", "n", 100, "размер страницы")
-	all := boolFlag(fs, "all", "a", false, "загрузить все страницы")
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
-	quiet := boolFlag(fs, "quiet", "q", false, "выводить только ID")
+	state := stringFlag(fs, "state", "", "", "state filter: queued, searching, found, incomplete, failed, canceled")
+	limit := intFlag(fs, "limit", "n", 100, "page size")
+	all := boolFlag(fs, "all", "a", false, "load all pages")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
+	quiet := boolFlag(fs, "quiet", "q", false, "print only IDs")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	if *limit < 1 {
-		fmt.Fprintln(a.Stderr, "magnet ls: --limit должен быть больше нуля")
+		fmt.Fprintln(a.Stderr, "magnet ls: --limit must be greater than zero")
 		return 2
 	}
 
@@ -235,7 +235,7 @@ func (a *App) runClientList(args []string) int {
 	}
 	if len(jobs) == 0 {
 		if !*quiet {
-			fmt.Fprintln(a.Stderr, "заданий нет")
+			fmt.Fprintln(a.Stderr, "no jobs")
 		}
 		return 0
 	}
@@ -252,14 +252,14 @@ func (a *App) runClientList(args []string) int {
 func (a *App) runClientShow(args []string) int {
 	fs := newFlagSet("show", a.Stderr)
 	server, token := clientConnFlags(fs)
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	ids := fs.Args()
 	if len(ids) == 0 {
-		fmt.Fprintln(a.Stderr, "magnet show: укажите хотя бы один ID задания")
+		fmt.Fprintln(a.Stderr, "magnet show: provide at least one job ID")
 		return 2
 	}
 
@@ -303,22 +303,22 @@ func (a *App) runClientShow(args []string) int {
 func (a *App) runClientWait(args []string) int {
 	fs := newFlagSet("wait", a.Stderr)
 	server, token := clientConnFlags(fs)
-	timeout := durationFlag(fs, "timeout", "t", 0, "общий таймаут ожидания (0 — без ограничения)")
-	interval := durationFlag(fs, "interval", "", 2*time.Second, "интервал опроса демона")
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
-	quiet := boolFlag(fs, "quiet", "q", false, "не выводить статусы")
-	strict := boolFlag(fs, "strict", "", false, "считать incomplete ошибкой")
+	timeout := durationFlag(fs, "timeout", "t", 0, "overall wait timeout (0 = unlimited)")
+	interval := durationFlag(fs, "interval", "", 2*time.Second, "daemon polling interval")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
+	quiet := boolFlag(fs, "quiet", "q", false, "do not print status messages")
+	strict := boolFlag(fs, "strict", "", false, "treat incomplete as an error")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	ids := fs.Args()
 	if len(ids) == 0 {
-		fmt.Fprintln(a.Stderr, "magnet wait: укажите хотя бы один ID задания")
+		fmt.Fprintln(a.Stderr, "magnet wait: provide at least one job ID")
 		return 2
 	}
 	if *interval <= 0 {
-		fmt.Fprintln(a.Stderr, "magnet wait: --interval должен быть больше нуля")
+		fmt.Fprintln(a.Stderr, "magnet wait: --interval must be greater than zero")
 		return 2
 	}
 
@@ -341,22 +341,22 @@ func (a *App) runClientWait(args []string) int {
 					fmt.Fprintln(a.Stdout, o.Job.Path)
 				}
 				if !*quiet {
-					fmt.Fprintf(a.Stderr, "%s: готово\n", o.ID)
+					fmt.Fprintf(a.Stderr, "%s: ready\n", o.ID)
 				}
 			case model.StateIncomplete:
 				if o.Job.Path != "" {
 					fmt.Fprintln(a.Stdout, o.Job.Path)
 				}
 				if o.Job.Warning != "" {
-					fmt.Fprintf(a.Stderr, "%s: предупреждение: %s\n", o.ID, o.Job.Warning)
+					fmt.Fprintf(a.Stderr, "%s: warning: %s\n", o.ID, o.Job.Warning)
 				}
 				if !*quiet {
-					fmt.Fprintf(a.Stderr, "%s: готово (incomplete)\n", o.ID)
+					fmt.Fprintf(a.Stderr, "%s: ready (incomplete)\n", o.ID)
 				}
 			case model.StateFailed:
-				fmt.Fprintf(a.Stderr, "%s: ошибка: %s\n", o.ID, o.Job.Error)
+				fmt.Fprintf(a.Stderr, "%s: error: %s\n", o.ID, o.Job.Error)
 			case model.StateCanceled:
-				fmt.Fprintf(a.Stderr, "%s: отменено\n", o.ID)
+				fmt.Fprintf(a.Stderr, "%s: canceled\n", o.ID)
 			}
 		}
 	}
@@ -380,28 +380,28 @@ func (a *App) runClientWait(args []string) int {
 func (a *App) runClientGet(args []string) int {
 	fs := newFlagSet("get", a.Stderr)
 	server, token := clientConnFlags(fs)
-	out := stringFlag(fs, "out", "o", ".", "каталог или путь к .torrent-файлу")
-	timeout := durationFlag(fs, "timeout", "t", 0, "общий таймаут ожидания (0 — без ограничения)")
-	interval := durationFlag(fs, "interval", "", 2*time.Second, "интервал опроса демона")
-	force := boolFlag(fs, "force", "f", false, "перезаписать существующий .torrent")
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
-	quiet := boolFlag(fs, "quiet", "q", false, "не выводить статусы")
-	strict := boolFlag(fs, "strict", "", false, "считать incomplete ошибкой")
+	out := stringFlag(fs, "out", "o", ".", "directory or .torrent file path")
+	timeout := durationFlag(fs, "timeout", "t", 0, "overall wait timeout (0 = unlimited)")
+	interval := durationFlag(fs, "interval", "", 2*time.Second, "daemon polling interval")
+	force := boolFlag(fs, "force", "f", false, "overwrite an existing .torrent")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
+	quiet := boolFlag(fs, "quiet", "q", false, "do not print status messages")
+	strict := boolFlag(fs, "strict", "", false, "treat incomplete as an error")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	ids := fs.Args()
 	if len(ids) == 0 {
-		fmt.Fprintln(a.Stderr, "magnet get: укажите хотя бы один ID задания")
+		fmt.Fprintln(a.Stderr, "magnet get: provide at least one job ID")
 		return 2
 	}
 	if *interval <= 0 {
-		fmt.Fprintln(a.Stderr, "magnet get: --interval должен быть больше нуля")
+		fmt.Fprintln(a.Stderr, "magnet get: --interval must be greater than zero")
 		return 2
 	}
 	if len(ids) > 1 && strings.HasSuffix(strings.ToLower(*out), ".torrent") {
-		fmt.Fprintln(a.Stderr, "magnet get: для нескольких заданий --out должен быть каталогом")
+		fmt.Fprintln(a.Stderr, "magnet get: --out must be a directory when multiple jobs are given")
 		return 2
 	}
 
@@ -435,7 +435,7 @@ func (a *App) runClientGet(args []string) int {
 			if o.Job.State == model.StateFailed {
 				res.Error = o.Job.Error
 			} else {
-				res.Error = "задание не завершено: " + string(o.Job.State)
+				res.Error = "job is not complete: " + string(o.Job.State)
 			}
 			results = append(results, res)
 			fmt.Fprintf(a.Stderr, "%s: %s\n", o.ID, res.Error)
@@ -444,7 +444,7 @@ func (a *App) runClientGet(args []string) int {
 		}
 		if o.Job.State == model.StateIncomplete {
 			if o.Job.Warning != "" {
-				fmt.Fprintf(a.Stderr, "%s: предупреждение: %s\n", o.ID, o.Job.Warning)
+				fmt.Fprintf(a.Stderr, "%s: warning: %s\n", o.ID, o.Job.Warning)
 			}
 			if *strict {
 				hadError = true
@@ -465,7 +465,7 @@ func (a *App) runClientGet(args []string) int {
 			if err != nil {
 				res.Error = err.Error()
 				results = append(results, res)
-				fmt.Fprintf(a.Stderr, "%s: скачать torrent: %v\n", o.ID, err)
+				fmt.Fprintf(a.Stderr, "%s: download torrent: %v\n", o.ID, err)
 				hadError = true
 				continue
 			}
@@ -474,7 +474,7 @@ func (a *App) runClientGet(args []string) int {
 			if err != nil {
 				res.Error = err.Error()
 				results = append(results, res)
-				fmt.Fprintf(a.Stderr, "%s: сохранить %s: %v\n", o.ID, path, err)
+				fmt.Fprintf(a.Stderr, "%s: save %s: %v\n", o.ID, path, err)
 				hadError = true
 				continue
 			}
@@ -486,9 +486,9 @@ func (a *App) runClientGet(args []string) int {
 		}
 		if !*quiet {
 			if exists {
-				fmt.Fprintf(a.Stderr, "%s: файл уже существует: %s\n", o.ID, path)
+				fmt.Fprintf(a.Stderr, "%s: file already exists: %s\n", o.ID, path)
 			} else {
-				fmt.Fprintf(a.Stderr, "%s: сохранено: %s\n", o.ID, path)
+				fmt.Fprintf(a.Stderr, "%s: saved: %s\n", o.ID, path)
 			}
 		}
 	}
@@ -508,15 +508,15 @@ func (a *App) runClientGet(args []string) int {
 func (a *App) runClientCancel(args []string) int {
 	fs := newFlagSet("cancel", a.Stderr)
 	server, token := clientConnFlags(fs)
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
-	quiet := boolFlag(fs, "quiet", "q", false, "не выводить статусы")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
+	quiet := boolFlag(fs, "quiet", "q", false, "do not print status messages")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	ids := fs.Args()
 	if len(ids) == 0 {
-		fmt.Fprintln(a.Stderr, "magnet cancel: укажите хотя бы один ID задания")
+		fmt.Fprintln(a.Stderr, "magnet cancel: provide at least one job ID")
 		return 2
 	}
 
@@ -560,15 +560,15 @@ func (a *App) runClientCancel(args []string) int {
 func (a *App) runClientRetry(args []string) int {
 	fs := newFlagSet("retry", a.Stderr)
 	server, token := clientConnFlags(fs)
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
-	quiet := boolFlag(fs, "quiet", "q", false, "не выводить статусы")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
+	quiet := boolFlag(fs, "quiet", "q", false, "do not print status messages")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	ids := fs.Args()
 	if len(ids) == 0 {
-		fmt.Fprintln(a.Stderr, "magnet retry: укажите хотя бы один ID задания")
+		fmt.Fprintln(a.Stderr, "magnet retry: provide at least one job ID")
 		return 2
 	}
 
@@ -612,16 +612,16 @@ func (a *App) runClientRetry(args []string) int {
 func (a *App) runClientRemove(args []string) int {
 	fs := newFlagSet("rm", a.Stderr)
 	server, token := clientConnFlags(fs)
-	purge := boolFlag(fs, "purge", "", false, "удалить также сохранённый .torrent")
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
-	quiet := boolFlag(fs, "quiet", "q", false, "не выводить статусы")
+	purge := boolFlag(fs, "purge", "", false, "also delete the saved .torrent")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
+	quiet := boolFlag(fs, "quiet", "q", false, "do not print status messages")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	ids := fs.Args()
 	if len(ids) == 0 {
-		fmt.Fprintln(a.Stderr, "magnet rm: укажите хотя бы один ID задания")
+		fmt.Fprintln(a.Stderr, "magnet rm: provide at least one job ID")
 		return 2
 	}
 
@@ -649,7 +649,7 @@ func (a *App) runClientRemove(args []string) int {
 		} else {
 			r.Removed = true
 			if !*quiet {
-				fmt.Fprintf(a.Stdout, "%s\tудалено\n", id)
+				fmt.Fprintf(a.Stdout, "%s\tremoved\n", id)
 			}
 		}
 		results = append(results, r)
@@ -666,7 +666,7 @@ func (a *App) runClientRemove(args []string) int {
 func (a *App) runClientStats(args []string) int {
 	fs := newFlagSet("stats", a.Stderr)
 	server, token := clientConnFlags(fs)
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
@@ -684,14 +684,14 @@ func (a *App) runClientStats(args []string) int {
 		return 0
 	}
 	s := resp.Stats
-	fmt.Fprintf(a.Stdout, "всего:      %d\n", s.Total)
-	fmt.Fprintf(a.Stdout, "в очереди:  %d\n", s.Queued)
-	fmt.Fprintf(a.Stdout, "ищутся:     %d\n", s.Searching)
-	fmt.Fprintf(a.Stdout, "найдены:    %d\n", s.Found)
-	fmt.Fprintf(a.Stdout, "неполные:   %d\n", s.Incomplete)
-	fmt.Fprintf(a.Stdout, "ошибки:     %d\n", s.Failed)
-	fmt.Fprintf(a.Stdout, "отменены:   %d\n", s.Canceled)
-	fmt.Fprintf(a.Stdout, "активных:   %d\n", s.Active)
+	fmt.Fprintf(a.Stdout, "total:       %d\n", s.Total)
+	fmt.Fprintf(a.Stdout, "queued:      %d\n", s.Queued)
+	fmt.Fprintf(a.Stdout, "searching:   %d\n", s.Searching)
+	fmt.Fprintf(a.Stdout, "found:       %d\n", s.Found)
+	fmt.Fprintf(a.Stdout, "incomplete:  %d\n", s.Incomplete)
+	fmt.Fprintf(a.Stdout, "failed:      %d\n", s.Failed)
+	fmt.Fprintf(a.Stdout, "canceled:    %d\n", s.Canceled)
+	fmt.Fprintf(a.Stdout, "active:      %d\n", s.Active)
 	fmt.Fprintf(a.Stdout, "uptime:     %s\n", shortDuration(time.Duration(resp.UptimeSeconds)*time.Second))
 	return 0
 }
@@ -699,7 +699,7 @@ func (a *App) runClientStats(args []string) int {
 func (a *App) runClientPing(args []string) int {
 	fs := newFlagSet("ping", a.Stderr)
 	server, token := clientConnFlags(fs)
-	jsonOut := boolFlag(fs, "json", "", false, "вывести JSON")
+	jsonOut := boolFlag(fs, "json", "", false, "output JSON")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
@@ -716,7 +716,7 @@ func (a *App) runClientPing(args []string) int {
 		printJSON(a.Stdout, resp)
 		return 0
 	}
-	fmt.Fprintf(a.Stdout, "ok, версия %s, uptime %s\n", resp.Version, shortDuration(time.Duration(resp.UptimeSeconds)*time.Second))
+	fmt.Fprintf(a.Stdout, "ok, version %s, uptime %s\n", resp.Version, shortDuration(time.Duration(resp.UptimeSeconds)*time.Second))
 	return 0
 }
 
@@ -785,14 +785,14 @@ func waitForJobs(ctx context.Context, client *api.Client, ids []string, interval
 		switch {
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			if err != nil {
-				err = fmt.Errorf("таймаут ожидания %s (последняя ошибка: %v)", timeout, err)
+				err = fmt.Errorf("wait timeout after %s (last error: %v)", timeout, err)
 			} else {
-				err = fmt.Errorf("таймаут ожидания %s", timeout)
+				err = fmt.Errorf("wait timeout after %s", timeout)
 			}
 		case ctx.Err() != nil:
 			err = ctx.Err()
 		case err == nil:
-			err = errors.New("задание не завершилось")
+			err = errors.New("job did not complete")
 		}
 		outcomes[id] = waitOutcome{ID: id, Err: err}
 	}
@@ -848,15 +848,15 @@ func printJobsTable(w, errW io.Writer, jobs []model.Job, total int) {
 	}
 	tw.Flush()
 	if total > len(jobs) {
-		fmt.Fprintf(errW, "показано %d из %d (используйте --all или --limit)\n", len(jobs), total)
+		fmt.Fprintf(errW, "showing %d of %d (use --all or --limit)\n", len(jobs), total)
 	}
 }
 
 func printJobDetail(w io.Writer, j model.Job) {
 	fmt.Fprintf(w, "ID:          %s\n", j.ID)
-	fmt.Fprintf(w, "Состояние:   %s\n", j.State)
+	fmt.Fprintf(w, "State:       %s\n", j.State)
 	if j.Version != "" {
-		fmt.Fprintf(w, "Версия:      %s\n", j.Version)
+		fmt.Fprintf(w, "Version:     %s\n", j.Version)
 	}
 	if j.InfoHashV1 != "" {
 		fmt.Fprintf(w, "Info hash v1: %s\n", j.InfoHashV1)
@@ -864,29 +864,29 @@ func printJobDetail(w io.Writer, j model.Job) {
 	if j.InfoHashV2 != "" {
 		fmt.Fprintf(w, "Info hash v2: %s\n", j.InfoHashV2)
 	}
-	fmt.Fprintf(w, "Имя:         %s\n", displayName(j))
-	fmt.Fprintf(w, "Размер:      %s\n", formatBytes(j.Length))
-	fmt.Fprintf(w, "Файлов:      %d\n", j.Files)
-	fmt.Fprintf(w, "Попыток:     %d\n", j.Attempts)
-	fmt.Fprintf(w, "Создано:     %s\n", formatTime(j.CreatedAt))
-	fmt.Fprintf(w, "Обновлено:   %s\n", formatTime(j.UpdatedAt))
+	fmt.Fprintf(w, "Name:        %s\n", displayName(j))
+	fmt.Fprintf(w, "Size:        %s\n", formatBytes(j.Length))
+	fmt.Fprintf(w, "Files:       %d\n", j.Files)
+	fmt.Fprintf(w, "Attempts:    %d\n", j.Attempts)
+	fmt.Fprintf(w, "Created:     %s\n", formatTime(j.CreatedAt))
+	fmt.Fprintf(w, "Updated:     %s\n", formatTime(j.UpdatedAt))
 	if j.StartedAt != nil {
-		fmt.Fprintf(w, "Начато:      %s\n", formatTime(*j.StartedAt))
+		fmt.Fprintf(w, "Started:     %s\n", formatTime(*j.StartedAt))
 	}
 	if j.FinishedAt != nil {
-		fmt.Fprintf(w, "Завершено:   %s\n", formatTime(*j.FinishedAt))
+		fmt.Fprintf(w, "Finished:    %s\n", formatTime(*j.FinishedAt))
 	}
 	if j.NextAttemptAt != nil {
-		fmt.Fprintf(w, "След. попытка: %s\n", formatTime(*j.NextAttemptAt))
+		fmt.Fprintf(w, "Next attempt: %s\n", formatTime(*j.NextAttemptAt))
 	}
 	if j.Path != "" {
-		fmt.Fprintf(w, "Файл:        %s\n", j.Path)
+		fmt.Fprintf(w, "File:        %s\n", j.Path)
 	}
 	if j.Warning != "" {
-		fmt.Fprintf(w, "Предупреждение: %s\n", j.Warning)
+		fmt.Fprintf(w, "Warning:     %s\n", j.Warning)
 	}
 	if j.Error != "" {
-		fmt.Fprintf(w, "Ошибка:      %s\n", j.Error)
+		fmt.Fprintf(w, "Error:       %s\n", j.Error)
 	}
 	for i, magnet := range j.Magnets {
 		if i == 0 && magnet == j.Magnet {

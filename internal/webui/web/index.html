@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,10 +12,18 @@
       <span class="logo" aria-hidden="true">🧲</span>
       <div>
         <h1>magnet</h1>
-        <p id="subtitle">Загрузка…</p>
+        <p id="subtitle" data-i18n="app.subtitle">Loading…</p>
       </div>
     </div>
     <div class="backend-info">
+      <label class="language-picker">
+        <span data-i18n="language.label">Language</span>
+        <select id="languageSelect">
+          <option value="auto" data-i18n="language.auto">Auto</option>
+          <option value="en">English</option>
+          <option value="ru">Русский</option>
+        </select>
+      </label>
       <span id="mode-badge" class="badge">…</span>
       <span id="version" class="muted"></span>
     </div>
@@ -25,34 +33,34 @@
     <section class="panel add-panel">
       <div class="panel-heading">
         <div>
-          <h2>Добавить magnet-ссылки</h2>
-          <p class="muted">Одна ссылка на строку. Строки, начинающиеся с <code>#</code>, игнорируются.</p>
+          <h2 data-i18n="add.title">Add magnet links</h2>
+          <p class="muted" data-i18n-html="add.hint">One link per line. Lines starting with <code>#</code> are ignored.</p>
         </div>
       </div>
       <form id="add-form">
         <textarea id="magnets" rows="4" spellcheck="false"
           placeholder="magnet:?xt=urn:btih:...&#10;magnet:?xt=urn:btih:..."></textarea>
         <div class="form-row">
-          <span class="muted small">Поиск выполняется в фоне: можно добавлять новые ссылки, не дожидаясь завершения.</span>
-          <button id="add-btn" type="submit" class="primary">Добавить</button>
+          <span class="muted small" data-i18n="add.async">Searches run in the background: you can add more links without waiting for completion.</span>
+          <button id="add-btn" type="submit" class="primary" data-i18n="add.submit">Add</button>
         </div>
       </form>
     </section>
 
     <section class="panel">
       <div class="toolbar">
-        <div id="filters" class="filters" role="group" aria-label="Фильтр по состоянию">
-          <button type="button" data-state="" class="active">Все</button>
-          <button type="button" data-state="queued">В очереди</button>
-          <button type="button" data-state="searching">Поиск</button>
-          <button type="button" data-state="found">Найдены</button>
-          <button type="button" data-state="incomplete">Неполные</button>
-          <button type="button" data-state="failed">Ошибки</button>
-          <button type="button" data-state="canceled">Отменены</button>
+        <div id="filters" class="filters" role="group" data-i18n-aria-label="filters.label" aria-label="Filter by state">
+          <button type="button" data-state="" class="active" data-i18n="filter.all">All</button>
+          <button type="button" data-state="queued" data-i18n="state.queued">Queued</button>
+          <button type="button" data-state="searching" data-i18n="state.searching">Searching</button>
+          <button type="button" data-state="found" data-i18n="state.found">Found</button>
+          <button type="button" data-state="incomplete" data-i18n="state.incomplete">Incomplete</button>
+          <button type="button" data-state="failed" data-i18n="state.failed">Failed</button>
+          <button type="button" data-state="canceled" data-i18n="state.canceled">Canceled</button>
         </div>
         <label class="checkbox">
           <input id="purge" type="checkbox">
-          удалять .torrent при удалении задания
+          <span data-i18n="purge.label">delete the .torrent file when deleting a job</span>
         </label>
       </div>
 
@@ -64,18 +72,18 @@
         <table>
           <thead>
             <tr>
-              <th>Торрент</th>
-              <th>Состояние</th>
-              <th class="col-meta">Попытки</th>
-              <th class="col-meta">Размер</th>
-              <th class="col-meta">Обновлено</th>
-              <th class="actions-col">Действия</th>
+              <th data-i18n="table.torrent">Torrent</th>
+              <th data-i18n="table.state">State</th>
+              <th class="col-meta" data-i18n="table.attempts">Attempts</th>
+              <th class="col-meta" data-i18n="table.size">Size</th>
+              <th class="col-meta" data-i18n="table.updated">Updated</th>
+              <th class="actions-col" data-i18n="table.actions">Actions</th>
             </tr>
           </thead>
           <tbody id="jobs"></tbody>
         </table>
       </div>
-      <p id="empty" class="empty hidden">Заданий пока нет. Добавьте magnet-ссылку выше.</p>
+      <p id="empty" class="empty hidden" data-i18n="jobs.empty">No jobs yet. Add a magnet link above.</p>
       <p id="limit-note" class="muted small hidden"></p>
     </section>
   </main>

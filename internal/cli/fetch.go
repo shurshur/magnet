@@ -33,23 +33,23 @@ type fetchResult struct {
 
 func (a *App) runFetch(args []string) int {
 	fs := newFlagSet("fetch", a.Stderr)
-	out := stringFlag(fs, "out", "o", ".", "каталог или путь к .torrent-файлу")
-	timeout := durationFlag(fs, "timeout", "t", 15*time.Minute, "таймаут поиска одной ссылки (0 — без ограничения)")
-	pieceTimeout := durationFlag(fs, "piece-layers-timeout", "", 30*time.Second, "сколько ждать piece layers для v2/hybrid (0 — не ждать)")
-	allowIncompleteV2 := boolFlag(fs, "allow-incomplete-v2", "", false, "сохранять v2 без piece layers со статусом incomplete")
-	strict := boolFlag(fs, "strict", "", false, "считать incomplete ошибкой (код 1)")
-	force := boolFlag(fs, "force", "f", false, "перезаписать существующий .torrent")
-	port := intFlag(fs, "port", "", 0, "UDP/TCP-порт DHT и peer-соединений (0 — случайный)")
-	noTrackers := boolFlag(fs, "no-trackers", "", false, "не использовать трекеры, только DHT")
-	jsonOut := boolFlag(fs, "json", "", false, "вывести результат в JSON")
-	quiet := boolFlag(fs, "quiet", "q", false, "не выводить прогресс")
-	debug := boolFlag(fs, "debug", "", false, "подробный лог torrent-клиента")
+	out := stringFlag(fs, "out", "o", ".", "directory or .torrent file path")
+	timeout := durationFlag(fs, "timeout", "t", 15*time.Minute, "per-link metadata search timeout (0 = unlimited)")
+	pieceTimeout := durationFlag(fs, "piece-layers-timeout", "", 30*time.Second, "how long to wait for v2/hybrid piece layers (0 = do not wait)")
+	allowIncompleteV2 := boolFlag(fs, "allow-incomplete-v2", "", false, "save v2 without piece layers with incomplete status")
+	strict := boolFlag(fs, "strict", "", false, "treat incomplete as an error (exit code 1)")
+	force := boolFlag(fs, "force", "f", false, "overwrite an existing .torrent")
+	port := intFlag(fs, "port", "", 0, "UDP/TCP port for DHT and peer connections (0 = random)")
+	noTrackers := boolFlag(fs, "no-trackers", "", false, "do not use trackers; DHT only")
+	jsonOut := boolFlag(fs, "json", "", false, "output results as JSON")
+	quiet := boolFlag(fs, "quiet", "q", false, "do not print progress")
+	debug := boolFlag(fs, "debug", "", false, "verbose torrent client log")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	if *timeout < 0 || *pieceTimeout < 0 {
-		fmt.Fprintln(a.Stderr, "magnet fetch: таймауты не могут быть отрицательными")
+		fmt.Fprintln(a.Stderr, "magnet fetch: timeouts cannot be negative")
 		return 2
 	}
 
@@ -59,7 +59,7 @@ func (a *App) runFetch(args []string) int {
 		return 2
 	}
 	if len(links) > 1 && strings.HasSuffix(strings.ToLower(*out), ".torrent") {
-		fmt.Fprintln(a.Stderr, "magnet fetch: для нескольких ссылок --out должен быть каталогом")
+		fmt.Fprintln(a.Stderr, "magnet fetch: --out must be a directory when multiple links are given")
 		return 2
 	}
 
@@ -71,7 +71,7 @@ func (a *App) runFetch(args []string) int {
 
 	cacheDir, err := os.MkdirTemp("", "magnet-fetch-*")
 	if err != nil {
-		fmt.Fprintf(a.Stderr, "magnet fetch: создать временный каталог: %v\n", err)
+		fmt.Fprintf(a.Stderr, "magnet fetch: create temporary directory: %v\n", err)
 		return 1
 	}
 	defer os.RemoveAll(cacheDir)
@@ -112,7 +112,7 @@ func (a *App) runFetch(args []string) int {
 			res.Error = parseErr.Error()
 			results = append(results, res)
 			hadError = true
-			fmt.Fprintf(a.Stderr, "[%d/%d] ошибка: %v\n", i+1, len(links), parseErr)
+			fmt.Fprintf(a.Stderr, "[%d/%d] error: %v\n", i+1, len(links), parseErr)
 			continue
 		}
 		id := parsed.PrimaryID
@@ -125,7 +125,7 @@ func (a *App) runFetch(args []string) int {
 			shortID = shortID[:12]
 		}
 		if !*quiet {
-			fmt.Fprintf(a.Stderr, "[%d/%d] %s: поиск метаданных в DHT...\n", i+1, len(links), shortID)
+			fmt.Fprintf(a.Stderr, "[%d/%d] %s: searching for metadata in the DHT...\n", i+1, len(links), shortID)
 		}
 
 		ctx := baseCtx
@@ -144,7 +144,7 @@ func (a *App) runFetch(args []string) int {
 				break
 			}
 			if *timeout > 0 && errors.Is(fetchErr, context.DeadlineExceeded) {
-				fetchErr = fmt.Errorf("метаданные не найдены за %s", timeout.String())
+				fetchErr = fmt.Errorf("metadata not found within %s", timeout.String())
 			}
 			res.Error = fetchErr.Error()
 			results = append(results, res)
@@ -180,7 +180,7 @@ func (a *App) runFetch(args []string) int {
 				res.Error = err.Error()
 				results = append(results, res)
 				hadError = true
-				fmt.Fprintf(a.Stderr, "[%d/%d] %s: сохранить %s: %v\n", i+1, len(links), shortID, path, err)
+				fmt.Fprintf(a.Stderr, "[%d/%d] %s: save %s: %v\n", i+1, len(links), shortID, path, err)
 				continue
 			}
 		}
@@ -191,9 +191,9 @@ func (a *App) runFetch(args []string) int {
 		}
 		if !*quiet {
 			if exists {
-				fmt.Fprintf(a.Stderr, "[%d/%d] %s: файл уже существует: %s\n", i+1, len(links), shortID, path)
+				fmt.Fprintf(a.Stderr, "[%d/%d] %s: file already exists: %s\n", i+1, len(links), shortID, path)
 			} else {
-				fmt.Fprintf(a.Stderr, "[%d/%d] %s: сохранено: %s\n", i+1, len(links), shortID, path)
+				fmt.Fprintf(a.Stderr, "[%d/%d] %s: saved: %s\n", i+1, len(links), shortID, path)
 			}
 		}
 		if !*jsonOut {
@@ -206,7 +206,7 @@ func (a *App) runFetch(args []string) int {
 	}
 
 	if interrupted {
-		fmt.Fprintln(a.Stderr, "magnet fetch: прервано")
+		fmt.Fprintln(a.Stderr, "magnet fetch: interrupted")
 		return 130
 	}
 	if hadError {
@@ -234,7 +234,7 @@ func startProgress(ctx context.Context, w io.Writer, label string, quiet bool) f
 		for {
 			select {
 			case <-ticker.C:
-				fmt.Fprintf(w, "    %s: всё ещё ищем (%s)...\n", label, shortDuration(time.Since(start)))
+				fmt.Fprintf(w, "    %s: still searching (%s)...\n", label, shortDuration(time.Since(start)))
 			case <-done:
 				return
 			case <-ctx.Done():

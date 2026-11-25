@@ -22,41 +22,41 @@ import (
 
 func (a *App) runDaemon(args []string) int {
 	fs := newFlagSet("daemon", a.Stderr)
-	listen := stringFlag(fs, "listen", "", "127.0.0.1:8787", "адрес HTTP API")
-	dataDir := stringFlag(fs, "data-dir", "", appdirs.DefaultDataDir(), "каталог состояния, БД и .torrent-файлов")
-	apiToken := stringFlag(fs, "api-token", "", defaultToken(), "токен API (env MAGNET_API_TOKEN)")
-	workers := intFlag(fs, "workers", "", 4, "число одновременных поисков")
-	attemptTimeout := durationFlag(fs, "attempt-timeout", "", 15*time.Minute, "таймаут одной попытки поиска (0 — без ограничения)")
-	retryDelay := durationFlag(fs, "retry-delay", "", 30*time.Second, "пауза перед повторной попыткой")
-	maxAttempts := intFlag(fs, "max-attempts", "", 0, "максимум попыток на ссылку (0 — без ограничения)")
-	pieceTimeout := durationFlag(fs, "piece-layers-timeout", "", 30*time.Second, "сколько ждать piece layers для v2/hybrid (0 — не ждать)")
-	allowIncompleteV2 := boolFlag(fs, "allow-incomplete-v2", "", false, "сохранять v2 без piece layers со статусом incomplete")
-	port := intFlag(fs, "port", "", 0, "UDP/TCP-порт DHT и peer-соединений (0 — случайный)")
-	noTrackers := boolFlag(fs, "no-trackers", "", false, "не использовать трекеры, только DHT")
-	logLevel := stringFlag(fs, "log-level", "", "info", "уровень лога: debug, info, warn, error")
-	logFormat := stringFlag(fs, "log-format", "", "text", "формат лога: text или json")
+	listen := stringFlag(fs, "listen", "", "127.0.0.1:8787", "HTTP API listen address")
+	dataDir := stringFlag(fs, "data-dir", "", appdirs.DefaultDataDir(), "state, database, and .torrent files directory")
+	apiToken := stringFlag(fs, "api-token", "", defaultToken(), "API token (env MAGNET_API_TOKEN)")
+	workers := intFlag(fs, "workers", "", 4, "number of concurrent searches")
+	attemptTimeout := durationFlag(fs, "attempt-timeout", "", 15*time.Minute, "timeout for one search attempt (0 = unlimited)")
+	retryDelay := durationFlag(fs, "retry-delay", "", 30*time.Second, "delay before retrying")
+	maxAttempts := intFlag(fs, "max-attempts", "", 0, "maximum attempts per link (0 = unlimited)")
+	pieceTimeout := durationFlag(fs, "piece-layers-timeout", "", 30*time.Second, "how long to wait for v2/hybrid piece layers (0 = do not wait)")
+	allowIncompleteV2 := boolFlag(fs, "allow-incomplete-v2", "", false, "save v2 without piece layers with incomplete status")
+	port := intFlag(fs, "port", "", 0, "UDP/TCP port for DHT and peer connections (0 = random)")
+	noTrackers := boolFlag(fs, "no-trackers", "", false, "do not use trackers; DHT only")
+	logLevel := stringFlag(fs, "log-level", "", "info", "log level: debug, info, warn, error")
+	logFormat := stringFlag(fs, "log-format", "", "text", "log format: text or json")
 	ok, code := parseFlags(fs, args)
 	if !ok {
 		return code
 	}
 	if *workers < 1 {
-		fmt.Fprintln(a.Stderr, "magnet daemon: --workers должен быть больше нуля")
+		fmt.Fprintln(a.Stderr, "magnet daemon: --workers must be greater than zero")
 		return 2
 	}
 	if *attemptTimeout < 0 || *pieceTimeout < 0 {
-		fmt.Fprintln(a.Stderr, "magnet daemon: таймауты не могут быть отрицательными")
+		fmt.Fprintln(a.Stderr, "magnet daemon: timeouts cannot be negative")
 		return 2
 	}
 	if *retryDelay < 0 {
-		fmt.Fprintln(a.Stderr, "magnet daemon: --retry-delay не может быть отрицательным")
+		fmt.Fprintln(a.Stderr, "magnet daemon: --retry-delay cannot be negative")
 		return 2
 	}
 	if *maxAttempts < 0 {
-		fmt.Fprintln(a.Stderr, "magnet daemon: --max-attempts не может быть отрицательным")
+		fmt.Fprintln(a.Stderr, "magnet daemon: --max-attempts cannot be negative")
 		return 2
 	}
 	if *port < 0 || *port > 65535 {
-		fmt.Fprintln(a.Stderr, "magnet daemon: --port должен быть в диапазоне 0..65535")
+		fmt.Fprintln(a.Stderr, "magnet daemon: --port must be in the range 0..65535")
 		return 2
 	}
 
@@ -73,14 +73,14 @@ func (a *App) runDaemon(args []string) int {
 
 	root, err := filepath.Abs(*dataDir)
 	if err != nil {
-		fmt.Fprintf(a.Stderr, "magnet daemon: путь к данным: %v\n", err)
+		fmt.Fprintf(a.Stderr, "magnet daemon: data path: %v\n", err)
 		return 1
 	}
 	torrentDir := filepath.Join(root, "torrents")
 	cacheDir := filepath.Join(root, "cache")
 	for _, dir := range []string{root, torrentDir, cacheDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintf(a.Stderr, "magnet daemon: создать каталог %s: %v\n", dir, err)
+			fmt.Fprintf(a.Stderr, "magnet daemon: create directory %s: %v\n", dir, err)
 			return 1
 		}
 	}
@@ -154,7 +154,7 @@ func (a *App) runDaemon(args []string) int {
 	}
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
-		fmt.Fprintf(a.Stderr, "magnet daemon: слушать %s: %v\n", *listen, err)
+		fmt.Fprintf(a.Stderr, "magnet daemon: listen on %s: %v\n", *listen, err)
 		mgr.Close()
 		return 1
 	}
@@ -206,7 +206,7 @@ func parseLogLevel(s string) (slog.Level, error) {
 	case "error":
 		return slog.LevelError, nil
 	default:
-		return 0, fmt.Errorf("неизвестный --log-level %q", s)
+		return 0, fmt.Errorf("unknown --log-level %q", s)
 	}
 }
 
@@ -218,7 +218,7 @@ func newLogger(w io.Writer, format string, level slog.Level) (*slog.Logger, erro
 	case "json":
 		return slog.New(slog.NewJSONHandler(w, opts)), nil
 	default:
-		return nil, fmt.Errorf("неизвестный --log-format %q", format)
+		return nil, fmt.Errorf("unknown --log-format %q", format)
 	}
 }
 
