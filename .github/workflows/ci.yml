@@ -12,6 +12,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -29,9 +31,6 @@ jobs:
       - name: Tests
         run: go test ./...
 
-      - name: Race tests
-        run: go test -race ./...
-
       - name: Check JavaScript syntax
         run: node --check internal/webui/web/app.js
 
@@ -42,8 +41,24 @@ jobs:
           version: "~> v2"
           args: check
 
+  race:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+      CGO_CFLAGS: "-std=gnu11"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Race tests
+        run: go test -race ./...
+
   build:
-    needs: test
+    needs: [test, race]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
